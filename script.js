@@ -1,13 +1,12 @@
 class VideoProcessor {
   constructor() {
-    this.video = document.createElement("video");
-    // Replace OffscreenCanvas with regular canvas
-    this.canvas = document.createElement('canvas');
-    this.canvas.style.maxWidth = '100%';
-    this.canvas.style.border = '1px solid #ccc';
-    document.getElementById('canvasContainer').appendChild(this.canvas);
+    this.canvas = document.createElement("canvas");
+    this.canvas.style.maxWidth = "100%";
+    this.canvas.style.border = "1px solid #ccc";
+    document.getElementById("canvasContainer").appendChild(this.canvas);
     this.ctx = this.canvas.getContext("2d");
     this.encoder = null;
+    this.decoder = null;
     this.mp4File = null;
     this.trackId = null;
     this.startTime = performance.now();
@@ -16,6 +15,9 @@ class VideoProcessor {
     this.frameDuration = 1000 / 30; // 33.33ms per frame at 30fps
     this.avcSequenceHeader = null;
     this.pendingFrames = [];
+    this.videoWidth = 0;
+    this.videoHeight = 0;
+    this.totalFrames = 0;
   }
 
   async initEncoder(width, height) {
@@ -33,7 +35,7 @@ class VideoProcessor {
       targetWidth = Math.floor(width * ratio);
       targetHeight = Math.floor(height * ratio);
       console.log("Scaling video to:", { targetWidth, targetHeight });
-      
+
       // Update canvas dimensions
       this.canvas.width = targetWidth;
       this.canvas.height = targetHeight;
@@ -53,7 +55,7 @@ class VideoProcessor {
       height: targetHeight,
       bitrate: targetBitrate,
       framerate: 30,
-      avc: { format: "annexb" }
+      avc: { format: "annexb" },
     };
 
     this.chunks = [];
@@ -158,21 +160,27 @@ class VideoProcessor {
                 nb_SPS: 1,
                 SPS: [this.spsData],
                 nb_PPS: 1,
-                PPS: [this.ppsData]
+                PPS: [this.ppsData],
               };
 
               // Update track configuration
               const track = this.mp4File.getTrackById(this.trackId);
-              if (track && track.trak && track.trak.mdia && track.trak.mdia.minf && 
-                  track.trak.mdia.minf.stbl && track.trak.mdia.minf.stbl.stsd) {
+              if (
+                track &&
+                track.trak &&
+                track.trak.mdia &&
+                track.trak.mdia.minf &&
+                track.trak.mdia.minf.stbl &&
+                track.trak.mdia.minf.stbl.stsd
+              ) {
                 const stsd = track.trak.mdia.minf.stbl.stsd;
                 if (!stsd.entries) stsd.entries = [];
                 if (!stsd.entries[0]) {
                   stsd.entries[0] = {
-                    type: 'avc1',
+                    type: "avc1",
                     width: track.width,
                     height: track.height,
-                    avcC: avcC
+                    avcC: avcC,
                   };
                 }
                 stsd.entries[0].avcC = avcC;
@@ -183,27 +191,29 @@ class VideoProcessor {
             // For key frames, ensure SPS and PPS are included before the frame data
             if (this.spsData && this.ppsData) {
               const fullFrame = new Uint8Array(
-                4 + this.spsData.length + 
-                4 + this.ppsData.length + 
-                initialView.length
+                4 +
+                  this.spsData.length +
+                  4 +
+                  this.ppsData.length +
+                  initialView.length
               );
-              
+
               let offset = 0;
               // Add SPS
               fullFrame.set([0, 0, 0, 1], offset);
               offset += 4;
               fullFrame.set(this.spsData, offset);
               offset += this.spsData.length;
-              
+
               // Add PPS
               fullFrame.set([0, 0, 0, 1], offset);
               offset += 4;
               fullFrame.set(this.ppsData, offset);
               offset += this.ppsData.length;
-              
+
               // Add frame data
               fullFrame.set(initialView, offset);
-              
+
               frameData = fullFrame;
             }
           }
@@ -213,7 +223,7 @@ class VideoProcessor {
             duration: Math.round((chunk.duration * 30000) / 1000000),
             dts: Math.round((chunk.timestamp * 30000) / 1000000),
             cts: Math.round((chunk.timestamp * 30000) / 1000000),
-            is_sync: chunk.type === "key"
+            is_sync: chunk.type === "key",
           };
 
           this.mp4File.addSample(this.trackId, sample.data, sample);
@@ -222,51 +232,91 @@ class VideoProcessor {
           this.status.textContent = "Error processing video chunk";
         }
       },
-      error: (e) => console.error("Encoding error:", e)
+      error: (e) => console.error("Encoding error:", e),
     });
 
     await this.encoder.configure(config);
   }
 
+  parseAVCNALUnits(data) {
+    const nalUnits = [];
+    let offset = 0;
+    const dataView = new DataView(
+      data.buffer,
+      data.byteOffset,
+      data.byteLength
+    );
+
+    // Try to parse as length-prefixed NAL units
+    try {
+      while (offset + 4 <= data.length) {
+        const length = dataView.getUint32(offset);
+        offset += 4;
+
+        if (length === 0 || offset + length > data.length) {
+          console.log("Invalid NAL unit length:", length);
+          break;
+        }
+
+        nalUnits.push(data.slice(offset, offset + length));
+        offset += length;
+      }
+    } catch (error) {
+      console.log("Error parsing AVC NAL units:", error);
+      return [];
+    }
+
+    return nalUnits;
+  }
+
   parseNALUnits(data) {
     const nalUnits = [];
     let offset = 0;
-    
+
+    // Try to parse as start code prefixed NAL units
     while (offset < data.length - 4) {
       // Look for start code
-      if (data[offset] === 0 && data[offset + 1] === 0 &&
-          data[offset + 2] === 0 && data[offset + 3] === 1) {
+      if (
+        data[offset] === 0 &&
+        data[offset + 1] === 0 &&
+        data[offset + 2] === 0 &&
+        data[offset + 3] === 1
+      ) {
         const start = offset + 4;
         let end = data.length;
-        
+
         // Find next start code
         for (let i = start; i < data.length - 4; i++) {
-          if (data[i] === 0 && data[i + 1] === 0 &&
-              data[i + 2] === 0 && data[i + 3] === 1) {
+          if (
+            data[i] === 0 &&
+            data[i + 1] === 0 &&
+            data[i + 2] === 0 &&
+            data[i + 3] === 1
+          ) {
             end = i;
             break;
           }
         }
-        
+
         nalUnits.push(data.slice(start, end));
         offset = end;
       } else {
         offset++;
       }
     }
-    
+
     return nalUnits;
   }
 
   async processSample(data, chunk) {
     const sample = {
       data: data,
-      duration: Math.round(chunk.duration * 30000 / 1000000),
-      dts: Math.round(chunk.timestamp * 30000 / 1000000),
-      cts: Math.round(chunk.timestamp * 30000 / 1000000),
-      is_sync: chunk.type === 'key'
+      duration: Math.round((chunk.duration * 30000) / 1000000),
+      dts: Math.round((chunk.timestamp * 30000) / 1000000),
+      cts: Math.round((chunk.timestamp * 30000) / 1000000),
+      is_sync: chunk.type === "key",
     };
-    
+
     this.mp4File.addSample(this.trackId, sample.data, sample);
   }
 
@@ -274,7 +324,7 @@ class VideoProcessor {
     // Basic avcC box creation - you may need to adjust this based on your exact needs
     const sps = this.findNALUnit(avcData, 7);
     const pps = this.findNALUnit(avcData, 8);
-    
+
     if (!sps || !pps) {
       throw new Error("Could not find SPS or PPS");
     }
@@ -288,22 +338,30 @@ class VideoProcessor {
       nb_SPS: 1,
       SPS: [sps],
       nb_PPS: 1,
-      PPS: [pps]
+      PPS: [pps],
     };
   }
 
   findNALUnit(data, nalType) {
     let offset = 0;
     while (offset < data.length - 4) {
-      if (data[offset] === 0 && data[offset + 1] === 0 &&
-          data[offset + 2] === 0 && data[offset + 3] === 1) {
-        const currentNalType = data[offset + 4] & 0x1F;
+      if (
+        data[offset] === 0 &&
+        data[offset + 1] === 0 &&
+        data[offset + 2] === 0 &&
+        data[offset + 3] === 1
+      ) {
+        const currentNalType = data[offset + 4] & 0x1f;
         if (currentNalType === nalType) {
           // Find the end of this NAL unit
           let end = offset + 5;
           while (end < data.length - 4) {
-            if (data[end] === 0 && data[end + 1] === 0 &&
-                data[end + 2] === 0 && data[end + 3] === 1) {
+            if (
+              data[end] === 0 &&
+              data[end + 1] === 0 &&
+              data[end + 2] === 0 &&
+              data[end + 3] === 1
+            ) {
               break;
             }
             end++;
@@ -388,174 +446,478 @@ class VideoProcessor {
   }
 
   async processFile(file) {
-    return new Promise((resolve, reject) => {
-      let loadTimeout;
-      let isResolved = false;
+    try {
+      const arrayBuffer = await file.arrayBuffer();
+      const demuxer = MP4Box.createFile();
 
-      const cleanup = () => {
-        clearTimeout(loadTimeout);
-        this.video.removeEventListener("canplay", onCanPlay);
-        this.video.removeEventListener("error", onError);
-        this.video.removeEventListener("loadstart", onLoadStart);
-        this.video.removeEventListener("progress", onProgress);
-      };
+      return new Promise((resolve, reject) => {
+        demuxer.onReady = async (info) => {
+          if (!info.videoTracks || info.videoTracks.length === 0) {
+            reject(new Error("No video track found"));
+            return;
+          }
 
-      const onLoadStart = () => {
-        console.log("Video load started");
-      };
+          const videoTrack = info.videoTracks[0];
+          this.videoWidth = videoTrack.track_width;
+          this.videoHeight = videoTrack.track_height;
+          const durationInSeconds = videoTrack.duration / videoTrack.timescale;
+          this.totalFrames = Math.floor(durationInSeconds * 30); // Assuming 30fps
+          console.log("Video info:", {
+            duration: durationInSeconds,
+            timescale: videoTrack.timescale,
+            calculatedFrames: durationInSeconds * 30,
+            roundedFrames: this.totalFrames,
+          });
 
-      const onProgress = () => {
-        console.log("Video loading progress");
-      };
+          // Set canvas dimensions
+          this.canvas.width = this.videoWidth;
+          this.canvas.height = this.videoHeight;
 
-      const onCanPlay = async () => {
-        if (isResolved) return;
-        console.log("Video can play");
+          console.log(
+            `Video dimensions: ${this.videoWidth}x${this.videoHeight}`
+          );
 
-        // Double check dimensions are available
-        if (!this.video.videoWidth || !this.video.videoHeight) {
-          console.log("Waiting for dimensions...");
-          return;
-        }
+          // Initialize decoder with codec validation
+          const codecString = videoTrack.codec.toLowerCase();
+          if (
+            !codecString.startsWith("avc1.") &&
+            !codecString.startsWith("h264")
+          ) {
+            reject(
+              new Error(
+                `Unsupported codec: ${videoTrack.codec}. Only H.264/AVC is supported.`
+              )
+            );
+            return;
+          }
 
-        isResolved = true;
-        cleanup();
+          // Ensure codec string is properly formatted
+          const formattedCodec = codecString.startsWith("h264")
+            ? `avc1.${codecString.slice(5)}`
+            : codecString;
 
-        try {
-          const videoWidth = this.video.videoWidth;
-          const videoHeight = this.video.videoHeight;
+          this.decoder = new VideoDecoder({
+            output: this.processDecodedFrame.bind(this),
+            error: (error) => {
+              console.error("Decoder error:", error);
+              this.status.textContent = `Decoder error: ${error.message}`;
+            },
+          });
 
-          console.log(`Video dimensions: ${videoWidth}x${videoHeight}`);
+          // Get avcC box from video track with enhanced error handling and logging
+          let avcC = null;
+          console.log("Video track codec:", videoTrack.codec);
+          console.log("Video track info:", {
+            width: videoTrack.track_width,
+            height: videoTrack.track_height,
+            timescale: videoTrack.timescale,
+            duration: videoTrack.duration,
+          });
 
-          if (!videoWidth || !videoHeight) {
-            throw new Error(
-              "Invalid video dimensions. Width and height must be greater than 0"
+          // Try different paths to find avcC box
+          if (videoTrack.avcC) {
+            console.log("Found avcC in videoTrack.avcC:", videoTrack.avcC);
+            avcC = videoTrack.avcC;
+          } else if (videoTrack.mdia?.minf?.stbl?.stsd?.entries?.[0]?.avcC) {
+            console.log(
+              "Found avcC in stsd entries:",
+              videoTrack.mdia.minf.stbl.stsd.entries[0].avcC
+            );
+            avcC = videoTrack.mdia.minf.stbl.stsd.entries[0].avcC;
+          } else {
+            console.log(
+              "No direct avcC box found, checking track structure:",
+              videoTrack
             );
           }
 
-          // Set canvas dimensions before initializing encoder
-          this.canvas.width = videoWidth;
-          this.canvas.height = videoHeight;
+          // If no avcC box found, try to extract it from the first few samples
+          if (!avcC) {
+            console.log(
+              "No avcC box found in metadata, attempting to extract from samples..."
+            );
 
-          console.log(
-            `Canvas dimensions set to: ${this.canvas.width}x${this.canvas.height}`
-          );
+            // Set up temporary sample processing
+            return new Promise((resolveConfig, rejectConfig) => {
+              let sps = null;
+              let pps = null;
 
-          await this.initEncoder(videoWidth, videoHeight);
+              const tempOnSamples = (track_id, ref, samples) => {
+                if (sps && pps) return; // Already found what we need
 
-          const creationTime = await this.getCreationTime(file);
-          if (creationTime) {
-            const videoDuration = this.video.duration * 1000;
-            this.startTime = creationTime.getTime() - videoDuration;
+                for (const sample of samples) {
+                  if (!sample.is_sync) continue; // Only look at keyframes
+
+                  console.log("Processing keyframe sample:", {
+                    size: sample.data.byteLength,
+                    is_sync: sample.is_sync,
+                  });
+
+                  // Try different NAL unit formats
+                  let nalUnits = [];
+                  const sampleData = new Uint8Array(sample.data);
+
+                  // First try standard format (0x00000001)
+                  nalUnits = this.parseNALUnits(sampleData);
+
+                  // If no NAL units found, try alternative format (length prefixed)
+                  if (nalUnits.length === 0) {
+                    nalUnits = this.parseAVCNALUnits(sampleData);
+                  }
+
+                  console.log(`Found ${nalUnits.length} NAL units in sample`);
+                  for (const nal of nalUnits) {
+                    const nalType = nal[0] & 0x1f;
+                    console.log(
+                      "NAL unit type:",
+                      nalType,
+                      "length:",
+                      nal.length
+                    );
+
+                    // Log first few bytes to help debug
+                    const nalHeader = Array.from(
+                      nal.slice(0, Math.min(10, nal.length))
+                    )
+                      .map((b) => b.toString(16).padStart(2, "0"))
+                      .join(" ");
+                    console.log("NAL header bytes:", nalHeader);
+
+                    if (nalType === 7 && !sps) {
+                      console.log("Found SPS NAL unit");
+                      sps = nal;
+                    } else if (nalType === 8 && !pps) {
+                      console.log("Found PPS NAL unit");
+                      pps = nal;
+                    }
+
+                    if (sps && pps) {
+                      // Construct avcC box
+                      avcC = {
+                        configurationVersion: 1,
+                        AVCProfileIndication: sps[1],
+                        profile_compatibility: sps[2],
+                        AVCLevelIndication: sps[3],
+                        lengthSizeMinusOne: 3,
+                        nb_SPS: 1,
+                        SPS: [sps],
+                        nb_PPS: 1,
+                        PPS: [pps],
+                      };
+
+                      console.log("Successfully constructed avcC box");
+
+                      const avcCBuffer = this.avcCToBuffer(avcC);
+                      console.log(
+                        "Constructed avcC buffer:",
+                        new Uint8Array(avcCBuffer)
+                      );
+
+                      try {
+                        // Configure decoder with the constructed avcC and formatted codec
+                        this.decoder.configure({
+                          codec: formattedCodec,
+                          codedWidth: this.videoWidth,
+                          codedHeight: this.videoHeight,
+                          description: new Uint8Array(avcCBuffer),
+                        });
+                        console.log("Decoder configured successfully");
+
+                        // Initialize encoder and continue processing
+                        this.initEncoder(this.videoWidth, this.videoHeight)
+                          .then(() => {
+                            // Restore original onSamples handler
+                            demuxer.onSamples = originalOnSamples;
+
+                            // Set up sample processing for all remaining samples
+                            demuxer.setExtractionOptions(videoTrack.id, null, {
+                              nbSamples: 1000000,
+                            });
+
+                            // Get total sample count and set up tracking
+                            const totalSamples = videoTrack.nb_samples;
+                            let processedSamples = 0;
+                            let decoderClosed = false;
+                            console.log(
+                              `Total samples to process: ${totalSamples}`
+                            );
+
+                            // Set up frame processing handler with sample counting
+                            demuxer.onSamples = async (
+                              track_id,
+                              ref,
+                              samples
+                            ) => {
+                              if (decoderClosed) return;
+
+                              console.log(
+                                `Processing ${samples.length} samples (${
+                                  processedSamples + samples.length
+                                }/${totalSamples})`
+                              );
+
+                              // Process all samples in this batch
+                              for (const sample of samples) {
+                                const chunk = new EncodedVideoChunk({
+                                  type: sample.is_sync ? "key" : "delta",
+                                  timestamp:
+                                    (sample.cts * 1000000) / sample.timescale,
+                                  duration:
+                                    (sample.duration * 1000000) /
+                                    sample.timescale,
+                                  data: sample.data,
+                                });
+                                this.decoder.decode(chunk);
+                              }
+                              processedSamples += samples.length;
+
+                              // Check if we've processed all samples
+                              if (
+                                processedSamples >= totalSamples &&
+                                !decoderClosed
+                              ) {
+                                decoderClosed = true;
+                                console.log(
+                                  "All samples processed, flushing decoder"
+                                );
+                                try {
+                                  await this.decoder.flush();
+                                  console.log("Decoder flushed, closing");
+                                  this.decoder.close();
+                                } catch (error) {
+                                  console.error(
+                                    "Error closing decoder:",
+                                    error
+                                  );
+                                }
+                                console.log(
+                                  "Decoder finished, finalizing encoding"
+                                );
+                                this.finalizeEncoding();
+                              }
+                            };
+
+                            // Start processing
+                            console.log("Starting sample processing");
+                            demuxer.start();
+                            resolveConfig();
+                          })
+                          .catch(rejectConfig);
+                      } catch (error) {
+                        console.error("Failed to configure decoder:", error);
+                        rejectConfig(error);
+                      }
+
+                      return;
+                    }
+                  }
+                }
+              };
+
+              // Temporarily override onSamples
+              const originalOnSamples = demuxer.onSamples;
+              demuxer.onSamples = tempOnSamples;
+
+              // Process more samples to ensure we find a keyframe
+              demuxer.setExtractionOptions(videoTrack.id, null, {
+                nbSamples: 30, // Increased from 5 to 30
+              });
+              demuxer.start();
+
+              // Set timeout for fallback
+              setTimeout(() => {
+                if (demuxer.onSamples === tempOnSamples) {
+                  // Only reject if we haven't already found SPS/PPS
+                  demuxer.onSamples = originalOnSamples;
+                  rejectConfig(new Error("Could not find SPS/PPS in samples"));
+                }
+              }, 5000);
+            });
           } else {
-            this.startTime = performance.now();
+            try {
+              // Use existing avcC box with formatted codec
+              this.decoder.configure({
+                codec: formattedCodec,
+                codedWidth: this.videoWidth,
+                codedHeight: this.videoHeight,
+                description: new Uint8Array(avcC.buffer),
+              });
+              console.log("Decoder configured successfully with existing avcC");
+            } catch (error) {
+              console.error(
+                "Failed to configure decoder with existing avcC:",
+                error
+              );
+              throw error;
+            }
           }
 
-          resolve();
-        } catch (error) {
-          console.error("Setup error:", error);
-          reject(error);
-        }
-      };
+          try {
+            // Initialize encoder and set up processing
+            await this.initEncoder(this.videoWidth, this.videoHeight);
+            console.log("Encoder initialized, setting up sample processing");
 
-      const onError = (error) => {
-        if (isResolved) return;
-        isResolved = true;
-        cleanup();
-        console.error("Video loading error:", error);
-        reject(new Error(`Video loading failed: ${error}`));
-      };
+            // Set up sample processing for all samples
+            demuxer.setExtractionOptions(videoTrack.id, null, {
+              nbSamples: 1000000,
+            });
 
-      // Configure video element
-      console.log("Configuring video element");
-      this.video = document.createElement("video"); // Create fresh element
-      this.video.preload = "auto"; // Changed to auto
-      this.video.crossOrigin = "anonymous";
-      this.video.muted = true;
-      this.video.playsInline = true;
+            // Set up frame processing handler
+            demuxer.onSamples = (track_id, ref, samples) => {
+              console.log(`Processing ${samples.length} samples`);
+              for (const sample of samples) {
+                const chunk = new EncodedVideoChunk({
+                  type: sample.is_sync ? "key" : "delta",
+                  timestamp: (sample.cts * 1000000) / sample.timescale,
+                  duration: (sample.duration * 1000000) / sample.timescale,
+                  data: sample.data,
+                });
+                this.decoder.decode(chunk);
+              }
+            };
 
-      // Add timeout to prevent hanging
-      loadTimeout = setTimeout(() => {
-        if (!isResolved) {
-          cleanup();
-          console.error("Video loading timed out");
-          reject(new Error("Video loading timed out"));
-        }
-      }, 30000);
+            const creationTime = await this.getCreationTime(file);
+            if (creationTime) {
+              const videoDuration = (info.duration / info.timescale) * 1000;
+              this.startTime = creationTime.getTime() - videoDuration;
+            } else {
+              this.startTime = performance.now();
+            }
 
-      // Set up event listeners before source
-      this.video.addEventListener("loadstart", onLoadStart);
-      this.video.addEventListener("progress", onProgress);
-      this.video.addEventListener("canplay", onCanPlay);
-      this.video.addEventListener("error", onError);
+            // Get total sample count and set up tracking
+            const totalSamples = videoTrack.nb_samples;
+            let processedSamples = 0;
+            let decoderClosed = false;
+            console.log(`Total samples to process: ${totalSamples}`);
 
-      // Set source and load
-      console.log("Setting video source");
-      const objectUrl = URL.createObjectURL(file);
-      this.video.src = objectUrl;
-      this.video.load();
-    });
+            // Set up frame processing handler with sample counting
+            demuxer.onSamples = async (track_id, ref, samples) => {
+              if (decoderClosed) return;
+
+              console.log(
+                `Processing ${samples.length} samples (${
+                  processedSamples + samples.length
+                }/${totalSamples})`
+              );
+
+              // Process all samples in this batch
+              for (const sample of samples) {
+                const chunk = new EncodedVideoChunk({
+                  type: sample.is_sync ? "key" : "delta",
+                  timestamp: (sample.cts * 1000000) / sample.timescale,
+                  duration: (sample.duration * 1000000) / sample.timescale,
+                  data: sample.data,
+                });
+                this.decoder.decode(chunk);
+              }
+              processedSamples += samples.length;
+
+              // Check if we've processed all samples
+              if (processedSamples >= totalSamples && !decoderClosed) {
+                decoderClosed = true;
+                console.log("All samples processed, flushing decoder");
+                try {
+                  await this.decoder.flush();
+                  console.log("Decoder flushed, closing");
+                  this.decoder.close();
+                } catch (error) {
+                  console.error("Error closing decoder:", error);
+                }
+                console.log("Decoder finished, finalizing encoding");
+                this.finalizeEncoding();
+              }
+            };
+
+            // Start processing
+            console.log("Starting sample processing");
+            demuxer.start();
+            resolve();
+          } catch (error) {
+            console.error("Error setting up processing:", error);
+            reject(error);
+          }
+        };
+
+        demuxer.onError = (error) => reject(error);
+
+        // Create a buffer object that matches MP4Box's expectations
+        arrayBuffer.fileStart = 0;
+
+        demuxer.appendBuffer(arrayBuffer);
+        demuxer.flush();
+      });
+    } catch (error) {
+      console.error("Error processing file:", error);
+      throw error;
+    }
   }
 
-  processFrame(now, metadata) {
+  processDecodedFrame(frame) {
     try {
-      // Check if encoder is available
-      if (!this.encoder) {
-        console.error("Encoder not initialized");
-        this.status.textContent = "Error: Encoder not initialized";
-        return;
-      }
-
-      // Process current frame with potential scaling
-      if (this.canvas.width !== this.video.videoWidth || 
-          this.canvas.height !== this.video.videoHeight) {
-        // Draw with scaling if dimensions differ
-        this.ctx.drawImage(this.video, 
-          0, 0, this.video.videoWidth, this.video.videoHeight,
-          0, 0, this.canvas.width, this.canvas.height
+      // Draw frame to canvas with potential scaling
+      if (
+        this.canvas.width !== frame.codedWidth ||
+        this.canvas.height !== frame.codedHeight
+      ) {
+        this.ctx.drawImage(
+          frame,
+          0,
+          0,
+          frame.codedWidth,
+          frame.codedHeight,
+          0,
+          0,
+          this.canvas.width,
+          this.canvas.height
         );
       } else {
-        this.ctx.drawImage(this.video, 0, 0);
+        this.ctx.drawImage(frame, 0, 0);
       }
-      
+
       this.addTimestamp();
 
-      const frame = new VideoFrame(this.canvas, {
-        timestamp: metadata.mediaTime * 1000000, // Convert to microseconds
+      // Create new frame from canvas for encoding
+      const newFrame = new VideoFrame(this.canvas, {
+        timestamp: frame.timestamp,
+        duration: frame.duration,
       });
 
       try {
-        this.encoder.encode(frame);
+        this.encoder.encode(newFrame);
       } catch (encodeError) {
         console.error("Frame encoding error:", encodeError);
       } finally {
-        frame.close();
+        newFrame.close();
       }
 
       this.frameCount++;
-      this.status.textContent = `Processing frame ${this.frameCount} (${(
-        (this.video.currentTime / this.video.duration) *
-        100
-      ).toFixed(1)}%)`;
+      this.status.textContent = `Processing frame ${this.frameCount}`;
 
-      // Request next frame if video is still playing and encoder exists
-      if (!this.video.ended && this.encoder) {
-        this.video.requestVideoFrameCallback(this.processFrame.bind(this));
-      }
+      // Close the original decoded frame
+      frame.close();
     } catch (error) {
       console.error("Frame processing error:", error);
       this.status.textContent = "Error processing frame";
     }
   }
 
-  setupVideoEvents() {
-    // Add ended event listener
-    const onEnded = () => {
-      this.finalizeEncoding();
-      this.video.removeEventListener("ended", onEnded);
-    };
+  async cleanupResources() {
+    if (this.decoder) {
+      await this.decoder.flush();
+      this.decoder.close();
+      this.decoder = null;
+    }
 
-    this.video.addEventListener("ended", onEnded);
+    if (this.canvas && this.canvas.parentNode) {
+      this.canvas.parentNode.removeChild(this.canvas);
+    }
+
+    this.ctx = null;
+    this.canvas = null;
+
+    if (typeof gc === "function") {
+      gc();
+    }
   }
 
   addTimestamp() {
@@ -574,33 +936,6 @@ class VideoProcessor {
     this.ctx.textAlign = "right";
     this.ctx.textBaseline = "bottom";
     this.ctx.fillText(text, this.canvas.width - 10, this.canvas.height - 10);
-  }
-
-  async cleanupResources() {
-    // Add canvas cleanup
-    if (this.canvas && this.canvas.parentNode) {
-      this.canvas.parentNode.removeChild(this.canvas);
-    }
-    // Close any open VideoFrames
-    if (this.currentFrame) {
-      this.currentFrame.close();
-      this.currentFrame = null;
-    }
-
-    // Release canvas resources
-    this.ctx = null;
-    this.canvas = null;
-
-    // Release video resources
-    this.video.src = "";
-    this.video.removeAttribute("src");
-    this.video.load();
-    URL.revokeObjectURL(this.video.src);
-
-    // Force garbage collection (where supported)
-    if (typeof gc === "function") {
-      gc();
-    }
   }
 
   async finalizeEncoding() {
@@ -658,18 +993,65 @@ class VideoProcessor {
     }
   }
 
+  avcCToBuffer(avcC) {
+    // Calculate total size needed for the buffer
+    const totalSize =
+      6 + // Version(1) + Profile(1) + Compatibility(1) + Level(1) + Length size(1) + Reserved(1)
+      2 + // SPS count(1) + total SPS length(2)
+      avcC.SPS.reduce((acc, sps) => acc + 2 + sps.length, 0) + // Each SPS: length(2) + data
+      1 + // PPS count(1)
+      avcC.PPS.reduce((acc, pps) => acc + 2 + pps.length, 0); // Each PPS: length(2) + data
+
+    const buffer = new ArrayBuffer(totalSize);
+    const view = new DataView(buffer);
+    let offset = 0;
+
+    // Write header
+    view.setUint8(offset++, avcC.configurationVersion);
+    view.setUint8(offset++, avcC.AVCProfileIndication);
+    view.setUint8(offset++, avcC.profile_compatibility);
+    view.setUint8(offset++, avcC.AVCLevelIndication);
+    view.setUint8(offset++, (avcC.lengthSizeMinusOne & 0x3) | 0xfc); // Reserved bits
+    view.setUint8(offset++, (avcC.nb_SPS & 0x1f) | 0xe0); // Reserved bits
+
+    // Write SPS
+    for (const sps of avcC.SPS) {
+      view.setUint16(offset, sps.length);
+      offset += 2;
+      new Uint8Array(buffer, offset, sps.length).set(sps);
+      offset += sps.length;
+    }
+
+    // Write PPS
+    view.setUint8(offset++, avcC.nb_PPS);
+    for (const pps of avcC.PPS) {
+      view.setUint16(offset, pps.length);
+      offset += 2;
+      new Uint8Array(buffer, offset, pps.length).set(pps);
+      offset += pps.length;
+    }
+
+    return buffer;
+  }
+
   setAvccBox(trackId, avcC) {
     const track = this.mp4File.getTrackById(trackId);
-    if (track && track.trak && track.trak.mdia && track.trak.mdia.minf && 
-        track.trak.mdia.minf.stbl && track.trak.mdia.minf.stbl.stsd) {
+    if (
+      track &&
+      track.trak &&
+      track.trak.mdia &&
+      track.trak.mdia.minf &&
+      track.trak.mdia.minf.stbl &&
+      track.trak.mdia.minf.stbl.stsd
+    ) {
       const stsd = track.trak.mdia.minf.stbl.stsd;
       if (!stsd.entries) stsd.entries = [];
       if (!stsd.entries[0]) {
         stsd.entries[0] = {
-          type: 'avc1',
+          type: "avc1",
           width: track.width,
           height: track.height,
-          avcC: avcC
+          avcC: avcC,
         };
       } else {
         stsd.entries[0].avcC = avcC;
@@ -686,15 +1068,6 @@ document.getElementById("videoInput").addEventListener("change", async (e) => {
 
   try {
     await processor.processFile(file);
-
-    // Set up video events before starting playback
-    processor.setupVideoEvents();
-
-    // Start frame processing using requestVideoFrameCallback
-    processor.video.requestVideoFrameCallback(
-      processor.processFrame.bind(processor)
-    );
-    processor.video.play();
   } catch (error) {
     console.error("Error processing video:", error);
     processor.status.textContent = "Error processing video";
