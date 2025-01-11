@@ -621,9 +621,10 @@ class VideoProcessor {
 
           try {
             await encoder.init(this.videoWidth, this.videoHeight);
-            await decoder.init(videoTrack, arrayBuffer, (frame) =>
-              encoder.encode(frame)
-            );
+            await decoder.init(videoTrack, arrayBuffer, (frame) => {
+              encoder.encode(frame);
+              frame.close();
+            });
 
             demuxer.setExtractionOptions(videoTrack.id, null, {
               nbSamples: 1000000,
