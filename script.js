@@ -530,6 +530,13 @@ class VideoProcessor {
               videoTrack
             );
           }
+            const creationTime = await this.getCreationTime(file);
+            if (creationTime) {
+              const videoDuration = (info.duration / info.timescale) * 1000;
+              this.startTime = creationTime.getTime() - videoDuration;
+            } else {
+              this.startTime = performance.now();
+            }
 
           // If no avcC box found, try to extract it from the first few samples
           if (!avcC) {
@@ -775,14 +782,6 @@ class VideoProcessor {
                 this.decoder.decode(chunk);
               }
             };
-
-            const creationTime = await this.getCreationTime(file);
-            if (creationTime) {
-              const videoDuration = (info.duration / info.timescale) * 1000;
-              this.startTime = creationTime.getTime() - videoDuration;
-            } else {
-              this.startTime = performance.now();
-            }
 
             // Get total sample count and set up tracking
             const totalSamples = videoTrack.nb_samples;
