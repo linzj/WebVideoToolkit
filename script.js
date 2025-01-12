@@ -339,8 +339,10 @@ class VideoProcessor {
         })
         .replace(" ", " "); // Ensure proper spacing
 
+      // Calculate font size based on canvas dimensions
+      const fontSize = Math.min(this.canvas.width, this.canvas.height) * 0.03;
       this.ctx.fillStyle = "white";
-      this.ctx.font = "20px Arial";
+      this.ctx.font = `${fontSize}px Arial`;
       this.ctx.textAlign = "right";
       this.ctx.fillText(
         timestamp,
