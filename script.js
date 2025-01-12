@@ -11,7 +11,7 @@ class VideoEncoder {
     this.blockingPromiseResolve = null;
   }
 
-  async init(width, height) {
+  async init(width, height, fps) {
     console.log("Initializing encoder with dimensions:", { width, height });
 
     // Calculate maximum dimensions for Level 5.1 (4096x2304)
@@ -21,7 +21,7 @@ class VideoEncoder {
     let targetHeight = height;
 
     // Scale down if needed while maintaining aspect ratio
-    if (width > maxWidth || height > maxHeight) {
+    if ((width > maxWidth || height > maxHeight) && false) {
       const ratio = Math.min(maxWidth / width, maxHeight / height);
       targetWidth = Math.floor(width * ratio);
       targetHeight = Math.floor(height * ratio);
@@ -41,7 +41,7 @@ class VideoEncoder {
       width: targetWidth,
       height: targetHeight,
       // bitrate: targetBitrate,
-      framerate: 30,
+      framerate: fps,
       avc: { format: "annexb" },
     };
 
@@ -311,7 +311,7 @@ class VideoProcessor {
     this.canvas.height = canvasHeight;
     this.mp4File = MP4Box.createFile({ ftyp: "isom" });
     this.encoder = new VideoEncoder(this.canvas, this.mp4File);
-    this.encoder.init(canvasWidth, canvasHeight);
+    this.encoder.init(canvasWidth, canvasHeight, config.fps);
     this.nb_samples = config.nb_samples;
     this.frame_count = 0;
     this.frameCountDisplay.textContent = `Processed frames: 0 / ${this.nb_samples}`;
@@ -437,6 +437,17 @@ class MP4Demuxer {
     return 0;
   }
 
+  calculateFPS(track) {
+    // Convert duration to seconds using timescale
+    const durationInSeconds = track.duration / track.timescale;
+
+    // Calculate FPS using number of samples (frames) divided by duration
+    const fps = track.nb_samples / durationInSeconds;
+
+    // Round to 2 decimal places for cleaner display
+    return Math.round(fps * 100) / 100;
+  }
+
   onReady(info) {
     this.transformationMatrix = info.matrix;
     this.setStatus("demux", "Ready");
@@ -458,6 +469,7 @@ class MP4Demuxer {
       nb_samples: track.nb_samples,
       rotation: this.getRotationFromMatrix(track.matrix),
       startTime: startTime,
+      fps: this.calculateFPS(track),
     });
     this.nb_samples = track.nb_samples;
 
