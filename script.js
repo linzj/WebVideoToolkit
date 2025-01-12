@@ -38,7 +38,7 @@ class VideoEncoder {
       codec: "avc1.640033", // Level 5.1 supports up to 4096x2304
       width: targetWidth,
       height: targetHeight,
-      bitrate: targetBitrate,
+      // bitrate: targetBitrate,
       framerate: 30,
       avc: { format: "annexb" },
     };
@@ -216,7 +216,7 @@ class VideoEncoder {
   async encode(frame) {
     this.encoder.encode(frame);
     frame.close();
-    if (this.encoder.encodeQueueSize > 10) {
+    if (this.encoder.encodeQueueSize > 80) {
       await this.encoder.flush();
     }
   }
