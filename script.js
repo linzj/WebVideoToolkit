@@ -213,9 +213,12 @@ class VideoEncoder {
     }
   }
 
-  encode(frame) {
+  async encode(frame) {
     this.encoder.encode(frame);
     frame.close();
+    if (this.encoder.encodeQueueSize > 10) {
+      await this.encoder.flush();
+    }
   }
 
   async finalize() {
@@ -237,6 +240,7 @@ class VideoProcessor {
     this.nb_samples = 0;
     this.frame_count = 0;
     this.isFinalized = false;
+    this.previousPromise = null;
   }
 
   setStatus(phase, message) {
@@ -286,7 +290,10 @@ class VideoProcessor {
     this.frameCountDisplay.textContent = `Processed frames: 0 / ${this.nb_samples}`;
   }
 
-  processFrame(frame) {
+  async processFrame(frame) {
+    if (this.previousPromise) {
+      await this.previousPromise;
+    }
     try {
       // Draw the frame
       this.ctx.drawImage(frame, 0, 0);
@@ -307,10 +314,11 @@ class VideoProcessor {
         duration: frame.duration,
       });
 
-      this.encoder.encode(newFrame);
       frame.close();
       this.frame_count++;
       this.frameCountDisplay.textContent = `Processed frames: ${this.frame_count} / ${this.nb_samples}`;
+      this.previousPromise = this.encoder.encode(newFrame);
+      await this.previousPromise;
       if (this.frame_count === this.nb_samples) {
         this.encoder.finalize();
       }
