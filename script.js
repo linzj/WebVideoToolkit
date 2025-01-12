@@ -242,6 +242,7 @@ class VideoProcessor {
     this.isFinalized = false;
     this.previousPromise = null;
     this.rotation = 0;
+    this.startTime = 0;
   }
 
   setStatus(phase, message) {
@@ -294,6 +295,7 @@ class VideoProcessor {
     this.frame_count = 0;
     this.frameCountDisplay.textContent = `Processed frames: 0 / ${this.nb_samples}`;
     this.setRotation(config.rotation);
+    this.startTime = config.startTime || Date.now();
   }
 
   async processFrame(frame) {
@@ -314,8 +316,21 @@ class VideoProcessor {
 
       this.ctx.restore();
 
-      // Add timestamp (remains upright)
-      const timestamp = new Date().toISOString();
+      // Convert frame.timestamp (microseconds) to milliseconds and add to startTime
+      const frameTime = new Date(
+        this.startTime.getTime() + Math.floor(frame.timestamp / 1000)
+      );
+      const timestamp = frameTime
+        .toLocaleString("sv", {
+          year: "numeric",
+          month: "2-digit",
+          day: "2-digit",
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit",
+        })
+        .replace(" ", " "); // Ensure proper spacing
+
       this.ctx.fillStyle = "white";
       this.ctx.font = "20px Arial";
       this.ctx.textAlign = "right";
@@ -398,6 +413,14 @@ class MP4Demuxer {
     this.setStatus("demux", "Ready");
     const track = info.videoTracks[0];
 
+    // Calculate duration in milliseconds
+    const durationMs = (track.duration * 1000) / track.timescale;
+
+    // Create a Date object for startTime
+    const startTime = track.created
+      ? new Date(track.created.getTime() - durationMs)
+      : new Date();
+
     this.onConfig({
       codec: track.codec,
       codedHeight: track.video.height,
@@ -405,6 +428,7 @@ class MP4Demuxer {
       description: this.getDescription(track),
       nb_samples: track.nb_samples,
       rotation: this.getRotationFromMatrix(track.matrix),
+      startTime: startTime,
     });
     this.nb_samples = track.nb_samples;
 
