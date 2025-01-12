@@ -286,16 +286,20 @@ class VideoProcessor {
     this.setStatus("decode", "Decoder configured");
 
     // Set up canvas dimensions
+    let canvasWidth = undefined;
+    let canvasHeight = undefined;
     if (config.rotation === 90 || config.rotation === 270) {
-      this.canvas.width = config.codedHeight;
-      this.canvas.height = config.codedWidth;
+      canvasWidth = config.codedHeight;
+      canvasHeight = config.codedWidth;
     } else {
-      this.canvas.width = config.codedWidth;
-      this.canvas.height = config.codedHeight;
+      canvasWidth = config.codedWidth;
+      canvasHeight = config.codedHeight;
     }
+    this.canvas.width = canvasWidth;
+    this.canvas.height = canvasHeight;
     this.mp4File = MP4Box.createFile({ ftyp: "isom" });
     this.encoder = new VideoEncoder(this.canvas, this.mp4File);
-    this.encoder.init(config.codedWidth, config.codedHeight);
+    this.encoder.init(canvasWidth, canvasHeight);
     this.nb_samples = config.nb_samples;
     this.frame_count = 0;
     this.frameCountDisplay.textContent = `Processed frames: 0 / ${this.nb_samples}`;
