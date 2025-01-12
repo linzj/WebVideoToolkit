@@ -7,6 +7,8 @@ class VideoEncoder {
     this.firstKeyFrame = true;
     this.spsData = null;
     this.ppsData = null;
+    this.blockingPromise = null;
+    this.blockingPromiseResolve = null;
   }
 
   async init(width, height) {
@@ -110,6 +112,13 @@ class VideoEncoder {
       },
       error: (e) => console.error("Encoding error:", e),
     });
+    this.encoder.ondequeue = () => {
+      if (this.blockingPromise && this.encoder.encodeQueueSize < 113) {
+        this.blockingPromiseResolve();
+        this.blockingPromise = null;
+        this.blockingPromiseResolve = null;
+      }
+    };
 
     await this.encoder.configure(config);
   }
@@ -216,8 +225,11 @@ class VideoEncoder {
   async encode(frame) {
     this.encoder.encode(frame);
     frame.close();
-    if (this.encoder.encodeQueueSize > 80) {
-      await this.encoder.flush();
+    if (this.encoder.encodeQueueSize > 230) {
+      this.blockingPromise = new Promise((resolve) => {
+        this.blockingPromiseResolve = resolve;
+      });
+      return this.blockingPromise;
     }
   }
 
