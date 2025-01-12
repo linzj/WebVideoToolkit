@@ -286,8 +286,13 @@ class VideoProcessor {
     this.setStatus("decode", "Decoder configured");
 
     // Set up canvas dimensions
-    this.canvas.width = config.codedWidth;
-    this.canvas.height = config.codedHeight;
+    if (config.rotation === 90 || config.rotation === 270) {
+      this.canvas.width = config.codedHeight;
+      this.canvas.height = config.codedWidth;
+    } else {
+      this.canvas.width = config.codedWidth;
+      this.canvas.height = config.codedHeight;
+    }
     this.mp4File = MP4Box.createFile({ ftyp: "isom" });
     this.encoder = new VideoEncoder(this.canvas, this.mp4File);
     this.encoder.init(config.codedWidth, config.codedHeight);
@@ -309,6 +314,9 @@ class VideoProcessor {
       if (this.rotation === 180) {
         this.ctx.scale(1, -1);
         this.ctx.translate(0, -this.canvas.height);
+      } else if (this.rotation === 90) {
+        this.ctx.translate(this.canvas.width, 0);
+        this.ctx.rotate((90 * Math.PI) / 180);
       }
 
       // Draw the frame
@@ -404,6 +412,9 @@ class MP4Demuxer {
 
     if (a === -65536 && b === 0) {
       return 180;
+    }
+    if (a == 0 && b == 65536) {
+      return 90;
     }
     return 0;
   }
