@@ -241,10 +241,15 @@ class VideoProcessor {
     this.frame_count = 0;
     this.isFinalized = false;
     this.previousPromise = null;
+    this.rotation = 0;
   }
 
   setStatus(phase, message) {
     this.status.textContent = `${phase}: ${message}`;
+  }
+
+  setRotation(rotation) {
+    this.rotation = rotation;
   }
 
   async processFile(file) {
@@ -288,6 +293,7 @@ class VideoProcessor {
     this.nb_samples = config.nb_samples;
     this.frame_count = 0;
     this.frameCountDisplay.textContent = `Processed frames: 0 / ${this.nb_samples}`;
+    this.setRotation(config.rotation);
   }
 
   async processFrame(frame) {
@@ -295,10 +301,20 @@ class VideoProcessor {
       await this.previousPromise;
     }
     try {
+      this.ctx.save();
+
+      // Apply rotation if needed
+      if (this.rotation === 180) {
+        this.ctx.scale(1, -1);
+        this.ctx.translate(0, -this.canvas.height);
+      }
+
       // Draw the frame
       this.ctx.drawImage(frame, 0, 0);
 
-      // Add timestamp
+      this.ctx.restore();
+
+      // Add timestamp (remains upright)
       const timestamp = new Date().toISOString();
       this.ctx.fillStyle = "white";
       this.ctx.font = "20px Arial";
@@ -342,7 +358,6 @@ class MP4Demuxer {
     this.file.onSamples = this.onSamples.bind(this);
     this.nb_samples = 0;
     this.processed_samples = 0;
-
     this.setupFile(uri);
   }
 
@@ -367,7 +382,19 @@ class MP4Demuxer {
     throw new Error("avcC, hvcC, vpcC, or av1C box not found");
   }
 
+  getRotationFromMatrix(transformationMatrix) {
+    // Matrix format: [a, b, u, c, d, v, x, y, w]
+    // For 180° rotation: [-1, 0, 0, 0, -1, 0, 0, 0, 1] (scaled by 65536)
+    const [a, b] = transformationMatrix;
+
+    if (a === -65536 && b === 0) {
+      return 180;
+    }
+    return 0;
+  }
+
   onReady(info) {
+    this.transformationMatrix = info.matrix;
     this.setStatus("demux", "Ready");
     const track = info.videoTracks[0];
 
@@ -377,6 +404,7 @@ class MP4Demuxer {
       codedWidth: track.video.width,
       description: this.getDescription(track),
       nb_samples: track.nb_samples,
+      rotation: this.getRotationFromMatrix(track.matrix),
     });
     this.nb_samples = track.nb_samples;
 
