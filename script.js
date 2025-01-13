@@ -253,7 +253,7 @@ class VideoProcessor {
     this.frame_count = 0;
     this.isFinalized = false;
     this.previousPromise = null;
-    this.rotation = 0;
+    this.matrix = null; // replace this.rotation with this.matrix
     this.startTime = 0;
     this.startTimeInput = document.getElementById("startTime");
     this.endTimeInput = document.getElementById("endTime");
@@ -265,8 +265,8 @@ class VideoProcessor {
     this.status.textContent = `${phase}: ${message}`;
   }
 
-  setRotation(rotation) {
-    this.rotation = rotation;
+  setMatrix(matrix) {
+    this.matrix = matrix;
   }
 
   convertTimeToMs(timeStr) {
@@ -352,10 +352,11 @@ class VideoProcessor {
     await this.decoder.configure(config);
     this.setStatus("decode", "Decoder configured");
 
-    // Set up canvas dimensions
+    // Set up canvas dimensions - now using matrix[0] and matrix[1] to detect rotation
     let canvasWidth = undefined;
     let canvasHeight = undefined;
-    if (config.rotation === 90 || config.rotation === 270) {
+    if (config.matrix[0] === 0) {
+      // 90 or 270 degree rotation
       canvasWidth = config.codedHeight;
       canvasHeight = config.codedWidth;
     } else {
@@ -369,7 +370,7 @@ class VideoProcessor {
     this.encoder.init(canvasWidth, canvasHeight, config.fps);
     this.frame_count = 0;
     this.frameCountDisplay.textContent = `Processed frames: 0 / ${this.nb_samples}`;
-    this.setRotation(config.rotation);
+    this.setMatrix(config.matrix);
     this.startTime = config.startTime || Date.now();
   }
 
@@ -397,13 +398,28 @@ class VideoProcessor {
     try {
       this.ctx.save();
 
-      // Apply rotation if needed
-      if (this.rotation === 180) {
-        this.ctx.scale(-1, -1);
-        this.ctx.translate(-this.canvas.width, -this.canvas.height);
-      } else if (this.rotation === 90) {
-        this.ctx.translate(this.canvas.width, 0);
-        this.ctx.rotate((90 * Math.PI) / 180);
+      // Apply transformation matrix
+      if (this.matrix) {
+        // Scale the matrix values back from fixed-point to floating-point
+        const scale = 1 / 65536;
+        const [a, b, u, c, d, v, x, y, w] = this.matrix.map(
+          (val) => val * scale
+        );
+
+        if (a === -1 && d === -1) {
+          // 180 degree rotation
+          this.ctx.translate(this.canvas.width, this.canvas.height);
+          this.ctx.rotate(Math.PI);
+        } else if (a === 0 && b === 1 && c === -1 && d === 0) {
+          // 90 degree rotation
+          this.ctx.translate(this.canvas.width, 0);
+          this.ctx.rotate(Math.PI / 2);
+        } else if (a === 0 && b === -1 && c === 1 && d === 0) {
+          // 270 degree rotation
+          this.ctx.translate(0, this.canvas.height);
+          this.ctx.rotate(-Math.PI / 2);
+        }
+        // For identity matrix (a=1, d=1) or other transforms, no transformation needed
       }
 
       // Draw the frame
@@ -501,20 +517,6 @@ class MP4Demuxer {
     throw new Error("avcC, hvcC, vpcC, or av1C box not found");
   }
 
-  getRotationFromMatrix(transformationMatrix) {
-    // Matrix format: [a, b, u, c, d, v, x, y, w]
-    // For 180° rotation: [-1, 0, 0, 0, -1, 0, 0, 0, 1] (scaled by 65536)
-    const [a, b] = transformationMatrix;
-
-    if (a === -65536 && b === 0) {
-      return 180;
-    }
-    if (a == 0 && b == 65536) {
-      return 90;
-    }
-    return 0;
-  }
-
   calculateFPS(track) {
     // Convert duration to seconds using timescale
     const durationInSeconds = track.duration / track.timescale;
@@ -527,7 +529,6 @@ class MP4Demuxer {
   }
 
   onReady(info) {
-    this.transformationMatrix = info.matrix;
     this.setStatus("demux", "Ready");
     const track = info.videoTracks[0];
 
@@ -545,7 +546,7 @@ class MP4Demuxer {
       codedWidth: track.video.width,
       description: this.getDescription(track),
       nb_samples: track.nb_samples,
-      rotation: this.getRotationFromMatrix(track.matrix),
+      matrix: track.matrix, // Pass matrix directly instead of rotation
       startTime: startTime,
       fps: this.calculateFPS(track),
     });
