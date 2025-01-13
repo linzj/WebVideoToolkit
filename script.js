@@ -113,7 +113,7 @@ class VideoEncoder {
       error: (e) => console.error("Encoding error:", e),
     });
     this.encoder.ondequeue = () => {
-      if (this.blockingPromise && this.encoder.encodeQueueSize < 113) {
+      if (this.blockingPromise && this.encoder.encodeQueueSize < 53) {
         this.blockingPromiseResolve();
         this.blockingPromise = null;
         this.blockingPromiseResolve = null;
@@ -281,6 +281,13 @@ class VideoProcessor {
     }
   }
 
+  finalize() {
+    if (!this.isFinalized) {
+      this.isFinalized = true;
+      this.encoder.finalize();
+    }
+  }
+
   async processFile(file) {
     this.validateTimeInput(this.startTimeInput);
     this.validateTimeInput(this.endTimeInput);
@@ -311,11 +318,17 @@ class VideoProcessor {
   }
 
   async processVideo(uri) {
+    let sawChunks = 0;
     const demuxer = new MP4Demuxer(uri, {
       onConfig: (config) => this.setupDecoder(config),
-      onChunk: (chunk) => this.decoder.decode(chunk),
+      onChunk: (chunk) => {
+        sawChunks++;
+        this.decoder.decode(chunk);
+      },
       setStatus: (phase, message) => this.setStatus(phase, message),
-      onChunkEnd: () => {
+      onChunkEnd: (sampleProcessed) => {
+        this.nb_samples = sampleProcessed;
+        console.log(`Saw ${sawChunks} chunks`);
         this.decoder.flush();
       },
       timeRangeStart: this.timeRangeStart,
@@ -329,6 +342,12 @@ class VideoProcessor {
       output: (frame) => this.processFrame(frame),
       error: (e) => console.error(e),
     });
+
+    this.decoder.ondequeue = () => {
+      if (this.decoder.decodeQueueSize == 0) {
+        this.finalize();
+      }
+    };
 
     await this.decoder.configure(config);
     this.setStatus("decode", "Decoder configured");
@@ -348,7 +367,6 @@ class VideoProcessor {
     this.mp4File = MP4Box.createFile({ ftyp: "isom" });
     this.encoder = new VideoEncoder(this.canvas, this.mp4File);
     this.encoder.init(canvasWidth, canvasHeight, config.fps);
-    this.nb_samples = config.nb_samples;
     this.frame_count = 0;
     this.frameCountDisplay.textContent = `Processed frames: 0 / ${this.nb_samples}`;
     this.setRotation(config.rotation);
@@ -370,10 +388,6 @@ class VideoProcessor {
     // Stop processing after end time
     if (this.timeRangeEnd !== undefined && frameTimeMs > this.timeRangeEnd) {
       frame.close();
-      if (!this.isFinalized) {
-        this.isFinalized = true;
-        await this.encoder.finalize();
-      }
       return;
     }
 
@@ -436,10 +450,6 @@ class VideoProcessor {
       this.frameCountDisplay.textContent = `Processed frames: ${this.frame_count} / ${this.nb_samples}`;
       this.previousPromise = this.encoder.encode(newFrame);
       await this.previousPromise;
-      if (this.frame_count === this.nb_samples) {
-        this.isFinalized = true;
-        this.encoder.finalize();
-      }
     } catch (error) {
       console.error("Error processing frame:", error);
     }
@@ -464,7 +474,9 @@ class MP4Demuxer {
     this.file.onReady = this.onReady.bind(this);
     this.file.onSamples = this.onSamples.bind(this);
     this.nb_samples = 0;
-    this.processed_samples = 0;
+    this.samples_passed = 0;
+    this.samples_processed = 0;
+    this.stopProcessingSamples = false;
     this.setupFile(uri);
   }
 
@@ -544,8 +556,9 @@ class MP4Demuxer {
   }
 
   onSamples(track_id, ref, samples) {
+    if (this.stopProcessingSamples) return;
     // Must add before the samples array is modified.
-    this.processed_samples += samples.length;
+    this.samples_passed += samples.length;
 
     if (this.timeRangeStart !== undefined) {
       // Binary search the sample that is closest to the start time and is a keyframe(lower bound).
@@ -574,6 +587,7 @@ class MP4Demuxer {
       samples = samples.slice(startIndex);
     }
 
+    let sliceEnd = false;
     if (this.timeRangeEnd !== undefined) {
       // Binary search the sample that is closest to the end time and is a keyframe(upper bound).
       let left = 0;
@@ -598,7 +612,10 @@ class MP4Demuxer {
       }
 
       // Trim samples array to end at the found keyframe
-      samples = samples.slice(0, endIndex + 1);
+      if (endIndex < samples.length - 1) {
+        samples = samples.slice(0, endIndex + 1);
+        sliceEnd = true;
+      }
     }
 
     for (const sample of samples) {
@@ -611,7 +628,11 @@ class MP4Demuxer {
         })
       );
     }
-    if (this.processed_samples === this.nb_samples) this.onChunkEnd();
+    this.samples_processed += samples.length;
+    if (sliceEnd || this.samples_passed === this.nb_samples) {
+      this.stopProcessingSamples = true;
+      this.onChunkEnd(this.samples_processed);
+    }
   }
 }
 
