@@ -11,6 +11,7 @@ class VideoEncoder {
     this.ppsData = null;
     this.blockingPromise = null;
     this.blockingPromiseResolve = null;
+    this.timescale = 10000;
   }
 
   async init(width, height, fps) {
@@ -53,10 +54,10 @@ class VideoEncoder {
       codecs: "avc1.640033",
       width: targetWidth,
       height: targetHeight,
-      timescale: 30000,
+      timescale: this.timescale,
       framerate: {
         fixed: true,
-        fps: 30,
+        fps: fps,
       },
     });
 
@@ -101,13 +102,15 @@ class VideoEncoder {
 
           const sample = {
             data: frameData,
-            duration: Math.round((chunk.duration * 30000) / 1000000),
-            dts: Math.round((chunk.timestamp * 30000) / 1000000),
-            cts: Math.round((chunk.timestamp * 30000) / 1000000),
+            duration: Math.round((chunk.duration * this.timescale) / 1000000),
+            dts: Math.round((chunk.timestamp * this.timescale) / 1000000),
+            cts: Math.round((chunk.timestamp * this.timescale) / 1000000),
             is_sync: chunk.type === "key",
           };
 
           this.mp4File.addSample(this.trackId, sample.data, sample);
+          console.log("Added sample:", sample);
+          console.log("From chunk:", chunk);
         } catch (error) {
           console.error("Error processing video chunk:", error);
         }
@@ -229,6 +232,9 @@ class VideoEncoder {
 
   async encode(frame) {
     while (this.encoder.encodeQueueSize > kEncodeQueueSize) {
+      if (this.blockingPromise) {
+        throw new Error("Blocking promise already exists");
+      }
       this.blockingPromise = new Promise((resolve) => {
         this.blockingPromiseResolve = resolve;
       });
@@ -237,6 +243,7 @@ class VideoEncoder {
       );
       await this.blockingPromise;
     }
+    console.log("Encoding frame:", frame);
     this.encoder.encode(frame);
     frame.close();
   }
@@ -269,6 +276,7 @@ class VideoProcessor {
     this.timeRangeEnd = undefined;
     this.timestampStartInput = document.getElementById("timestampStart");
     this.userStartTime = null;
+    this.outputTaskPromises = [];
   }
 
   setStatus(phase, message) {
@@ -301,7 +309,11 @@ class VideoProcessor {
     return true;
   }
 
-  finalize() {
+  async finalize() {
+    if (this.outputTaskPromises.length > 0) {
+      await Promise.all(this.outputTaskPromises);
+      this.outputTaskPromises = [];
+    }
     if (!this.isFinalized) {
       this.isFinalized = true;
       this.encoder.finalize();
@@ -375,7 +387,7 @@ class VideoProcessor {
   async setupDecoder(config) {
     // Initialize the decoder
     this.decoder = new VideoDecoder({
-      output: (frame) => this.processFrame(frame),
+      output: (frame) => this.outputTaskPromises.push(this.processFrame(frame)),
       error: (e) => console.error(e),
     });
 
@@ -426,6 +438,15 @@ class VideoProcessor {
     if (this.timeRangeEnd !== undefined && frameTimeMs > this.timeRangeEnd) {
       frame.close();
       return;
+    }
+
+    let tempPromise = this.previousPromise;
+    while (tempPromise) {
+      await tempPromise;
+      if (tempPromise === this.previousPromise) {
+        break;
+      }
+      tempPromise = this.previousPromise;
     }
 
     try {
@@ -489,14 +510,13 @@ class VideoProcessor {
         this.canvas.height - 10
       );
 
-      frame.close();
-      if (this.previousPromise) {
-        await this.previousPromise;
-      }
-      const newFrame = new VideoFrame(this.canvas, {
+      const videoFrameOptions = {
         timestamp: frame.timestamp,
         duration: frame.duration,
-      });
+      };
+      frame.close();
+      console.log(`videoFrameOptions: ${JSON.stringify(videoFrameOptions)}`);
+      const newFrame = new VideoFrame(this.canvas, videoFrameOptions);
 
       this.frame_count++;
       this.frameCountDisplay.textContent = `Processed frames: ${this.frame_count} / ${this.nb_samples}`;
@@ -656,6 +676,9 @@ class MP4Demuxer {
     }
 
     for (const sample of samples) {
+      console.log(
+        `Sample: sample.cts:${sample.cts}, sample.timescale:${sample.timescale}, sample.duration:${sample.duration}, sample.data.byteLength:${sample.data.byteLength}`
+      );
       this.onChunk(
         new EncodedVideoChunk({
           type: sample.is_sync ? "key" : "delta",
