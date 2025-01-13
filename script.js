@@ -228,17 +228,17 @@ class VideoEncoder {
   }
 
   async encode(frame) {
-    this.encoder.encode(frame);
-    frame.close();
-    if (this.encoder.encodeQueueSize > kEncodeQueueSize) {
+    while (this.encoder.encodeQueueSize > kEncodeQueueSize) {
       this.blockingPromise = new Promise((resolve) => {
         this.blockingPromiseResolve = resolve;
       });
       console.log(
         `Blocking until queue size is reduced: ${this.encoder.encodeQueueSize}`
       );
-      return this.blockingPromise;
+      await this.blockingPromise;
     }
+    this.encoder.encode(frame);
+    frame.close();
   }
 
   async finalize() {
@@ -428,9 +428,6 @@ class VideoProcessor {
       return;
     }
 
-    if (this.previousPromise) {
-      await this.previousPromise;
-    }
     try {
       this.ctx.save();
 
@@ -492,12 +489,15 @@ class VideoProcessor {
         this.canvas.height - 10
       );
 
+      frame.close();
+      if (this.previousPromise) {
+        await this.previousPromise;
+      }
       const newFrame = new VideoFrame(this.canvas, {
         timestamp: frame.timestamp,
         duration: frame.duration,
       });
 
-      frame.close();
       this.frame_count++;
       this.frameCountDisplay.textContent = `Processed frames: ${this.frame_count} / ${this.nb_samples}`;
       this.previousPromise = this.encoder.encode(newFrame);
