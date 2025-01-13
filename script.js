@@ -259,6 +259,8 @@ class VideoProcessor {
     this.endTimeInput = document.getElementById("endTime");
     this.timeRangeStart = undefined;
     this.timeRangeEnd = undefined;
+    this.timestampStartInput = document.getElementById("timestampStart");
+    this.userStartTime = null;
   }
 
   setStatus(phase, message) {
@@ -279,6 +281,16 @@ class VideoProcessor {
     if (!regex.test(input.value)) {
       input.value = "00:00";
     }
+  }
+
+  validateTimestampInput(input) {
+    const regex = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/;
+    if (input.value && !regex.test(input.value)) {
+      alert("Invalid timestamp format. Please use YYYY-MM-DD HH:MM:SS");
+      input.value = "";
+      return false;
+    }
+    return true;
   }
 
   finalize() {
@@ -305,6 +317,19 @@ class VideoProcessor {
     ) {
       this.timeRangeEnd = undefined;
       this.endTimeInput.value = "00:00";
+    }
+
+    // Add timestamp validation
+    if (this.timestampStartInput.value && !this.validateTimestampInput(this.timestampStartInput)) {
+      return;
+    }
+    
+    if (this.timestampStartInput.value) {
+      this.userStartTime = new Date(this.timestampStartInput.value);
+      if (isNaN(this.userStartTime.getTime())) {
+        alert("Invalid date. Please check your input.");
+        return;
+      }
     }
 
     try {
@@ -371,7 +396,7 @@ class VideoProcessor {
     this.frame_count = 0;
     this.frameCountDisplay.textContent = `Processed frames: 0 / ${this.nb_samples}`;
     this.setMatrix(config.matrix);
-    this.startTime = config.startTime || Date.now();
+    this.startTime = this.userStartTime || config.startTime || new Date();
   }
 
   async processFrame(frame) {
