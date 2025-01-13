@@ -19,12 +19,25 @@
             margin-top: 20px;
             font-weight: bold;
         }
+
+        .time-inputs {
+            margin: 20px 0;
+        }
+
+        .time-inputs input {
+            width: 60px;
+            margin: 0 10px;
+        }
     </style>
 </head>
 
 <body>
     <h1>Video Frame Processor</h1>
     <input type="file" id="videoInput" accept="video/*">
+    <div class="time-inputs">
+        <label>Start Time: <input type="text" id="startTime" value="00:00" pattern="[0-9]{2}:[0-9]{2}"></label>
+        <label>End Time: <input type="text" id="endTime" value="00:00" pattern="[0-9]{2}:[0-9]{2}"></label>
+    </div>
     <div id="status">Select a video file to begin processing</div>
     <div id="canvasContainer" style="margin-top: 20px;"></div>
     <div id="frameCount">Processed frames: 0 / 0</div>

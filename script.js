@@ -255,6 +255,10 @@ class VideoProcessor {
     this.previousPromise = null;
     this.rotation = 0;
     this.startTime = 0;
+    this.startTimeInput = document.getElementById("startTime");
+    this.endTimeInput = document.getElementById("endTime");
+    this.timeRangeStart = undefined;
+    this.timeRangeEnd = undefined;
   }
 
   setStatus(phase, message) {
@@ -265,7 +269,37 @@ class VideoProcessor {
     this.rotation = rotation;
   }
 
+  convertTimeToMs(timeStr) {
+    const [minutes, seconds] = timeStr.split(":").map(Number);
+    return (minutes * 60 + seconds) * 1000;
+  }
+
+  validateTimeInput(input) {
+    const regex = /^[0-5][0-9]:[0-5][0-9]$/;
+    if (!regex.test(input.value)) {
+      input.value = "00:00";
+    }
+  }
+
   async processFile(file) {
+    this.validateTimeInput(this.startTimeInput);
+    this.validateTimeInput(this.endTimeInput);
+
+    const startMs = this.convertTimeToMs(this.startTimeInput.value);
+    const endMs = this.convertTimeToMs(this.endTimeInput.value);
+
+    this.timeRangeStart = startMs > 0 ? startMs : undefined;
+    this.timeRangeEnd = endMs > 0 ? endMs : undefined;
+
+    if (
+      this.timeRangeEnd !== undefined &&
+      this.timeRangeStart !== undefined &&
+      this.timeRangeEnd <= this.timeRangeStart
+    ) {
+      this.timeRangeEnd = undefined;
+      this.endTimeInput.value = "00:00";
+    }
+
     try {
       const videoURL = URL.createObjectURL(file);
       await this.processVideo(videoURL);
@@ -284,6 +318,8 @@ class VideoProcessor {
       onChunkEnd: () => {
         this.decoder.flush();
       },
+      timeRangeStart: this.timeRangeStart,
+      timeRangeEnd: this.timeRangeEnd,
     });
   }
 
@@ -320,6 +356,27 @@ class VideoProcessor {
   }
 
   async processFrame(frame) {
+    const frameTimeMs = Math.floor(frame.timestamp / 1000);
+
+    // Skip frames before start time
+    if (
+      this.timeRangeStart !== undefined &&
+      frameTimeMs < this.timeRangeStart
+    ) {
+      frame.close();
+      return;
+    }
+
+    // Stop processing after end time
+    if (this.timeRangeEnd !== undefined && frameTimeMs > this.timeRangeEnd) {
+      frame.close();
+      if (!this.isFinalized) {
+        this.isFinalized = true;
+        await this.encoder.finalize();
+      }
+      return;
+    }
+
     if (this.previousPromise) {
       await this.previousPromise;
     }
@@ -341,9 +398,12 @@ class VideoProcessor {
       this.ctx.restore();
 
       // Convert frame.timestamp (microseconds) to milliseconds and add to startTime
-      const frameTime = new Date(
-        this.startTime.getTime() + Math.floor(frame.timestamp / 1000)
-      );
+      let frameTimeMs = Math.floor(frame.timestamp / 1000);
+      if (this.timeRangeStart !== undefined) {
+        frameTimeMs += this.timeRangeStart;
+      }
+
+      const frameTime = new Date(this.startTime.getTime() + frameTimeMs);
       const timestamp = frameTime
         .toLocaleString("sv", {
           year: "numeric",
@@ -377,6 +437,7 @@ class VideoProcessor {
       this.previousPromise = this.encoder.encode(newFrame);
       await this.previousPromise;
       if (this.frame_count === this.nb_samples) {
+        this.isFinalized = true;
         this.encoder.finalize();
       }
     } catch (error) {
@@ -387,11 +448,16 @@ class VideoProcessor {
 
 // MP4 demuxer class implementation
 class MP4Demuxer {
-  constructor(uri, { onConfig, onChunk, setStatus, onChunkEnd }) {
+  constructor(
+    uri,
+    { onConfig, onChunk, setStatus, onChunkEnd, timeRangeStart, timeRangeEnd }
+  ) {
     this.onConfig = onConfig;
     this.onChunk = onChunk;
     this.setStatus = setStatus;
     this.onChunkEnd = onChunkEnd;
+    this.timeRangeStart = timeRangeStart;
+    this.timeRangeEnd = timeRangeEnd;
     this.file = MP4Box.createFile();
 
     this.file.onError = (error) => setStatus("demux", error);
@@ -478,6 +544,63 @@ class MP4Demuxer {
   }
 
   onSamples(track_id, ref, samples) {
+    // Must add before the samples array is modified.
+    this.processed_samples += samples.length;
+
+    if (this.timeRangeStart !== undefined) {
+      // Binary search the sample that is closest to the start time and is a keyframe(lower bound).
+      let left = 0;
+      let right = samples.length - 1;
+      let startIndex = 0;
+
+      while (left <= right) {
+        const mid = Math.floor((left + right) / 2);
+        const sampleTimeMs = (samples[mid].cts * 1000) / samples[mid].timescale;
+
+        if (sampleTimeMs < this.timeRangeStart) {
+          left = mid + 1;
+        } else {
+          right = mid - 1;
+        }
+      }
+
+      // Find the nearest keyframe at or before the desired start time
+      startIndex = left;
+      while (startIndex > 0 && !samples[startIndex].is_sync) {
+        startIndex--;
+      }
+
+      // Trim samples array to start from the found keyframe
+      samples = samples.slice(startIndex);
+    }
+
+    if (this.timeRangeEnd !== undefined) {
+      // Binary search the sample that is closest to the end time and is a keyframe(upper bound).
+      let left = 0;
+      let right = samples.length - 1;
+      let endIndex = samples.length - 1;
+
+      while (left <= right) {
+        const mid = Math.floor((left + right) / 2);
+        const sampleTimeMs = (samples[mid].cts * 1000) / samples[mid].timescale;
+
+        if (sampleTimeMs <= this.timeRangeEnd) {
+          left = mid + 1;
+        } else {
+          right = mid - 1;
+        }
+      }
+
+      // Find the next keyframe after the desired end time
+      endIndex = right;
+      while (endIndex < samples.length - 1 && !samples[endIndex + 1].is_sync) {
+        endIndex++;
+      }
+
+      // Trim samples array to end at the found keyframe
+      samples = samples.slice(0, endIndex + 1);
+    }
+
     for (const sample of samples) {
       this.onChunk(
         new EncodedVideoChunk({
@@ -488,7 +611,6 @@ class MP4Demuxer {
         })
       );
     }
-    this.processed_samples += samples.length;
     if (this.processed_samples === this.nb_samples) this.onChunkEnd();
   }
 }
