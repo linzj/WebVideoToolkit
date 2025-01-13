@@ -1,3 +1,5 @@
+const kEncodeQueueSize = 33;
+
 class VideoEncoder {
   constructor(canvas, mp4File) {
     this.canvas = canvas;
@@ -113,7 +115,10 @@ class VideoEncoder {
       error: (e) => console.error("Encoding error:", e),
     });
     this.encoder.ondequeue = () => {
-      if (this.blockingPromise && this.encoder.encodeQueueSize < 53) {
+      if (
+        this.blockingPromise &&
+        this.encoder.encodeQueueSize < kEncodeQueueSize
+      ) {
         this.blockingPromiseResolve();
         this.blockingPromise = null;
         this.blockingPromiseResolve = null;
@@ -225,10 +230,13 @@ class VideoEncoder {
   async encode(frame) {
     this.encoder.encode(frame);
     frame.close();
-    if (this.encoder.encodeQueueSize > 230) {
+    if (this.encoder.encodeQueueSize > kEncodeQueueSize) {
       this.blockingPromise = new Promise((resolve) => {
         this.blockingPromiseResolve = resolve;
       });
+      console.log(
+        `Blocking until queue size is reduced: ${this.encoder.encodeQueueSize}`
+      );
       return this.blockingPromise;
     }
   }
@@ -320,10 +328,13 @@ class VideoProcessor {
     }
 
     // Add timestamp validation
-    if (this.timestampStartInput.value && !this.validateTimestampInput(this.timestampStartInput)) {
+    if (
+      this.timestampStartInput.value &&
+      !this.validateTimestampInput(this.timestampStartInput)
+    ) {
       return;
     }
-    
+
     if (this.timestampStartInput.value) {
       this.userStartTime = new Date(this.timestampStartInput.value);
       if (isNaN(this.userStartTime.getTime())) {
