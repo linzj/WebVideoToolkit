@@ -399,8 +399,8 @@ class VideoProcessor {
 
       // Apply rotation if needed
       if (this.rotation === 180) {
-        this.ctx.scale(1, -1);
-        this.ctx.translate(0, -this.canvas.height);
+        this.ctx.scale(-1, -1);
+        this.ctx.translate(-this.canvas.width, -this.canvas.height);
       } else if (this.rotation === 90) {
         this.ctx.translate(this.canvas.width, 0);
         this.ctx.rotate((90 * Math.PI) / 180);
