@@ -1,4 +1,12 @@
 const kEncodeQueueSize = 33;
+const kEnableVerboseLogging = false;
+
+function verboseLog() {
+  // unpack arguments to suite into console.log.
+  if (kEnableVerboseLogging) {
+    console.log.apply(console, arguments);
+  }
+}
 
 class VideoEncoder {
   constructor(canvas, mp4File) {
@@ -15,7 +23,7 @@ class VideoEncoder {
   }
 
   async init(width, height, fps) {
-    console.log("Initializing encoder with dimensions:", { width, height });
+    verboseLog("Initializing encoder with dimensions:", { width, height });
 
     // Calculate maximum dimensions for Level 5.1 (4096x2304)
     const maxWidth = 4096;
@@ -61,7 +69,7 @@ class VideoEncoder {
       },
     });
 
-    console.log("Track ID returned:", this.trackId);
+    verboseLog("Track ID returned:", this.trackId);
 
     if (!this.trackId || this.trackId < 0) {
       throw new Error(`Invalid track ID returned: ${this.trackId}`);
@@ -82,10 +90,10 @@ class VideoEncoder {
               const nalType = nal[0] & 0x1f;
               if (nalType === 7 && !this.spsData) {
                 this.spsData = nal;
-                console.log("Found SPS:", this.spsData);
+                verboseLog("Found SPS:", this.spsData);
               } else if (nalType === 8 && !this.ppsData) {
                 this.ppsData = nal;
-                console.log("Found PPS:", this.ppsData);
+                verboseLog("Found PPS:", this.ppsData);
               }
             }
 
@@ -109,8 +117,8 @@ class VideoEncoder {
           };
 
           this.mp4File.addSample(this.trackId, sample.data, sample);
-          console.log("Added sample:", sample);
-          console.log("From chunk:", chunk);
+          verboseLog("Added sample:", sample);
+          verboseLog("From chunk:", chunk);
         } catch (error) {
           console.error("Error processing video chunk:", error);
         }
@@ -238,12 +246,12 @@ class VideoEncoder {
       this.blockingPromise = new Promise((resolve) => {
         this.blockingPromiseResolve = resolve;
       });
-      console.log(
+      verboseLog(
         `Blocking until queue size is reduced: ${this.encoder.encodeQueueSize}`
       );
       await this.blockingPromise;
     }
-    console.log("Encoding frame:", frame);
+    verboseLog("Encoding frame:", frame);
     this.encoder.encode(frame);
     frame.close();
   }
@@ -376,7 +384,7 @@ class VideoProcessor {
       setStatus: (phase, message) => this.setStatus(phase, message),
       onChunkEnd: (sampleProcessed) => {
         this.nb_samples = sampleProcessed;
-        console.log(`Saw ${sawChunks} chunks`);
+        verboseLog(`Saw ${sawChunks} chunks`);
         this.decoder.flush();
       },
       timeRangeStart: this.timeRangeStart,
@@ -515,7 +523,7 @@ class VideoProcessor {
         duration: frame.duration,
       };
       frame.close();
-      console.log(`videoFrameOptions: ${JSON.stringify(videoFrameOptions)}`);
+      verboseLog(`videoFrameOptions: ${JSON.stringify(videoFrameOptions)}`);
       const newFrame = new VideoFrame(this.canvas, videoFrameOptions);
 
       this.frame_count++;
@@ -676,7 +684,7 @@ class MP4Demuxer {
     }
 
     for (const sample of samples) {
-      console.log(
+      verboseLog(
         `Sample: sample.cts:${sample.cts}, sample.timescale:${sample.timescale}, sample.duration:${sample.duration}, sample.data.byteLength:${sample.data.byteLength}`
       );
       this.onChunk(
