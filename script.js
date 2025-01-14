@@ -114,7 +114,7 @@ class VideoEncoder {
             }
 
             if (this.spsData && this.ppsData) {
-              frameData = this.createFullFrame(initialView);
+              // frameData = this.createFullFrame(initialView);
             }
           }
 
@@ -441,7 +441,7 @@ class VideoProcessor {
       },
       setStatus: (phase, message) => this.setStatus(phase, message),
       onChunkEnd: (sampleProcessed) => {
-        this.nb_samples = sampleProcessed;
+        this.nb_samples = sawChunks;
         verboseLog(`Saw ${sawChunks} chunks`);
       },
       timeRangeStart: this.timeRangeStart,
@@ -713,8 +713,13 @@ class MP4Demuxer {
         }
       }
 
+      startIndex = left;
+      // The start is not in the current 1000 samples.
+      // Just return.
+      if (startIndex == samples.length) {
+        return;
+      }
       // Find the nearest keyframe at or before the desired start time
-      startIndex = Math.min(left, samples.length - 1);
       while (startIndex > 0 && !samples[startIndex].is_sync) {
         startIndex--;
       }
