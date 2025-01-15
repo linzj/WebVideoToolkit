@@ -1,43 +1,43 @@
 import { ChunkDispatcher } from "./chunkDispatcher.js";
 import { VideoEncoder } from "./videoEncoder.js";
 import { TimeStampRenderer } from "./timeStampRenderer.js";
+import { TimeStampProvider } from "./timeStampProvider.js";
 import { verboseLog, performanceLog, kDecodeQueueSize } from "./logging.js";
 
 const kEnableVerboseLogging = false;
 const kEnablePerformanceLogging = true;
 
 class VideoProcessor {
-  constructor() {
-    this.canvas = document.createElement("canvas");
+  constructor({
+    canvas,
+    statusElement,
+    frameCountDisplay,
+    startTimeInput,
+    endTimeInput,
+    timestampProvider,
+  }) {
+    this.canvas = canvas;
     this.ctx = this.canvas.getContext("2d");
-    this.status = document.getElementById("status");
-    document.getElementById("canvasContainer").appendChild(this.canvas);
+    this.status = statusElement;
     this.mp4File = null;
     this.encoder = null;
-    this.frameCountDisplay = document.getElementById("frameCount");
+    this.frameCountDisplay = frameCountDisplay;
     this.nb_samples = 0;
     this.frame_count = 0;
     this.state = "idle";
     this.previousPromise = null;
     this.matrix = null; // replace this.rotation with this.matrix
     this.startTime = 0;
-    this.startTimeInput = document.getElementById("startTime");
-    this.endTimeInput = document.getElementById("endTime");
+    this.startTimeInput = startTimeInput;
+    this.endTimeInput = endTimeInput;
     this.timeRangeStart = undefined;
     this.timeRangeEnd = undefined;
-    this.timestampStartInput = document.getElementById("timestampStart");
     this.userStartTime = null;
     this.outputTaskPromises = [];
     this.startProcessVideoTime = undefined;
     this.chuckDispatcher = new ChunkDispatcher();
     this.timestampRenderer = null;
-    this.enableTimestampCheckbox = document.getElementById("enableTimestamp");
-    this.timestampInputs = document.getElementById("timestampInputs");
-    
-    // Set up timestamp checkbox handler
-    this.enableTimestampCheckbox.addEventListener("change", () => {
-      this.timestampInputs.classList.toggle("visible", this.enableTimestampCheckbox.checked);
-    });
+    this.timestampProvider = timestampProvider;
   }
 
   setStatus(phase, message) {
@@ -109,20 +109,13 @@ class VideoProcessor {
       this.endTimeInput.value = "00:00";
     }
 
-    // Add timestamp validation
-    if (
-      this.timestampStartInput.value &&
-      !this.validateTimestampInput(this.timestampStartInput)
-    ) {
+    if (!this.timestampProvider.validateTimestampInput()) {
       return;
     }
 
-    if (this.timestampStartInput.value) {
-      this.userStartTime = new Date(this.timestampStartInput.value);
-      if (isNaN(this.userStartTime.getTime())) {
-        alert("Invalid date. Please check your input.");
-        return;
-      }
+    this.userStartTime = this.timestampProvider.getUserStartTime();
+    if (!this.timestampProvider.hasValidStartTime()) {
+      return;
     }
 
     try {
@@ -234,9 +227,10 @@ class VideoProcessor {
     this.frameCountDisplay.textContent = `Processed frames: 0 / ${this.nb_samples}`;
     this.setMatrix(config.matrix);
     this.startTime = this.userStartTime || config.startTime || new Date();
-    // Only create timestampRenderer if checkbox is checked
-    this.timestampRenderer = this.enableTimestampCheckbox.checked ? 
-      new TimeStampRenderer(this.startTime) : null;
+    // Only create timestampRenderer if timestamp is enabled
+    this.timestampRenderer = this.timestampProvider.isEnabled()
+      ? new TimeStampRenderer(this.startTime)
+      : null;
     // Kick off the processing.
     this.dispatch(kDecodeQueueSize);
     if (!isChromeBased) {
@@ -530,14 +524,42 @@ class MP4FileSink {
 // Event listener for file input
 document.getElementById("videoInput").addEventListener("change", async (e) => {
   const file = e.target.files[0];
+  if (!file) {
+    document.getElementById("processButton").disabled = true;
+    return;
+  }
+
+  // Enable the process button when a file is selected
+  document.getElementById("processButton").disabled = false;
+});
+
+// Add process button click handler
+document.getElementById("processButton").addEventListener("click", async () => {
+  const file = document.getElementById("videoInput").files[0];
   if (!file) return;
 
-  const processor = new VideoProcessor();
+  const timestampProvider = new TimeStampProvider({
+    timestampStartInput: document.getElementById("timestampStart"),
+    enableTimestampCheckbox: document.getElementById("enableTimestamp"),
+    timestampInputs: document.getElementById("timestampInputs"),
+  });
+
+  const processor = new VideoProcessor({
+    canvas: document.getElementById("processorCanvas"),
+    statusElement: document.getElementById("status"),
+    frameCountDisplay: document.getElementById("frameCount"),
+    startTimeInput: document.getElementById("startTime"),
+    endTimeInput: document.getElementById("endTime"),
+    timestampProvider: timestampProvider,
+  });
 
   try {
+    document.getElementById("processButton").disabled = true;
     await processor.processFile(file);
   } catch (error) {
     console.error("Error processing video:", error);
     processor.status.textContent = "Error processing video";
+  } finally {
+    document.getElementById("processButton").disabled = false;
   }
 });

@@ -79,7 +79,10 @@
 
     <div id="status">Select a video file to begin processing</div>
     <div id="frameCount">Processed frames: 0 / 0</div>
-    <div id="canvasContainer" style="margin-top: 20px;"></div>
+    <div id="canvasContainer" style="margin-top: 20px;">
+        <canvas id="processorCanvas"></canvas>
+    </div>
+    <button id="processButton" disabled>Process Video</button>
 
     <script src="https://cdn.jsdelivr.net/npm/mp4box@0.5.3/dist/mp4box.all.min.js"></script>
     <script src="
