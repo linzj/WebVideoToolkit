@@ -2,18 +2,14 @@ import { ChunkDispatcher } from "./chunkDispatcher.js";
 import { VideoEncoder } from "./videoEncoder.js";
 import { TimeStampRenderer } from "./timeStampRenderer.js";
 import { TimeStampProvider } from "./timeStampProvider.js";
+import { TimeRangeProvider } from "./timeRangeProvider.js";
 import { verboseLog, performanceLog, kDecodeQueueSize } from "./logging.js";
-
-const kEnableVerboseLogging = false;
-const kEnablePerformanceLogging = true;
 
 class VideoProcessor {
   constructor({
     canvas,
     statusElement,
     frameCountDisplay,
-    startTimeInput,
-    endTimeInput,
     timestampProvider,
   }) {
     this.canvas = canvas;
@@ -28,8 +24,6 @@ class VideoProcessor {
     this.previousPromise = null;
     this.matrix = null; // replace this.rotation with this.matrix
     this.startTime = 0;
-    this.startTimeInput = startTimeInput;
-    this.endTimeInput = endTimeInput;
     this.timeRangeStart = undefined;
     this.timeRangeEnd = undefined;
     this.userStartTime = null;
@@ -46,18 +40,6 @@ class VideoProcessor {
 
   setMatrix(matrix) {
     this.matrix = matrix;
-  }
-
-  convertTimeToMs(timeStr) {
-    const [minutes, seconds] = timeStr.split(":").map(Number);
-    return (minutes * 60 + seconds) * 1000;
-  }
-
-  validateTimeInput(input) {
-    const regex = /^[0-5][0-9]:[0-5][0-9]$/;
-    if (!regex.test(input.value)) {
-      input.value = "00:00";
-    }
   }
 
   validateTimestampInput(input) {
@@ -90,24 +72,9 @@ class VideoProcessor {
     }
   }
 
-  async processFile(file) {
-    this.validateTimeInput(this.startTimeInput);
-    this.validateTimeInput(this.endTimeInput);
-
-    const startMs = this.convertTimeToMs(this.startTimeInput.value);
-    const endMs = this.convertTimeToMs(this.endTimeInput.value);
-
-    this.timeRangeStart = startMs > 0 ? startMs : undefined;
-    this.timeRangeEnd = endMs > 0 ? endMs : undefined;
-
-    if (
-      this.timeRangeEnd !== undefined &&
-      this.timeRangeStart !== undefined &&
-      this.timeRangeEnd <= this.timeRangeStart
-    ) {
-      this.timeRangeEnd = undefined;
-      this.endTimeInput.value = "00:00";
-    }
+  async processFile(file, startMs, endMs) {
+    this.timeRangeStart = startMs;
+    this.timeRangeEnd = endMs;
 
     if (!this.timestampProvider.validateTimestampInput()) {
       return;
@@ -299,11 +266,7 @@ class VideoProcessor {
 
       // Replace the timestamp drawing code with TimeStampRenderer
       if (this.timestampRenderer) {
-        let adjustedFrameTimeMs = frameTimeMs;
-        if (this.timeRangeStart !== undefined) {
-          adjustedFrameTimeMs += this.timeRangeStart;
-        }
-        this.timestampRenderer.draw(this.ctx, adjustedFrameTimeMs);
+        this.timestampRenderer.draw(this.ctx, frameTimeMs);
       }
 
       const videoFrameOptions = {
@@ -538,6 +501,11 @@ document.getElementById("processButton").addEventListener("click", async () => {
   const file = document.getElementById("videoInput").files[0];
   if (!file) return;
 
+  const timeRangeProvider = new TimeRangeProvider({
+    startTimeInput: document.getElementById("startTime"),
+    endTimeInput: document.getElementById("endTime"),
+  });
+
   const timestampProvider = new TimeStampProvider({
     timestampStartInput: document.getElementById("timestampStart"),
     enableTimestampCheckbox: document.getElementById("enableTimestamp"),
@@ -548,14 +516,13 @@ document.getElementById("processButton").addEventListener("click", async () => {
     canvas: document.getElementById("processorCanvas"),
     statusElement: document.getElementById("status"),
     frameCountDisplay: document.getElementById("frameCount"),
-    startTimeInput: document.getElementById("startTime"),
-    endTimeInput: document.getElementById("endTime"),
     timestampProvider: timestampProvider,
   });
 
   try {
     document.getElementById("processButton").disabled = true;
-    await processor.processFile(file);
+    const { startMs, endMs } = timeRangeProvider.getTimeRange();
+    await processor.processFile(file, startMs, endMs);
   } catch (error) {
     console.error("Error processing video:", error);
     processor.status.textContent = "Error processing video";
