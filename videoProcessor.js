@@ -1,5 +1,5 @@
 import { verboseLog, performanceLog, kDecodeQueueSize } from "./logging.js";
-import { ChunkDispatcher } from "./chunkDispatcher.js";
+import { SampleManager } from "./sampleManager.js";
 import { VideoEncoder } from "./videoEncoder.js";
 import { TimeStampRenderer } from "./timeStampRenderer.js";
 
@@ -22,7 +22,7 @@ export class VideoProcessor {
     this.userStartTime = null;
     this.outputTaskPromises = [];
     this.startProcessVideoTime = undefined;
-    this.chuckDispatcher = new ChunkDispatcher();
+    this.sampleManager = new SampleManager();
     this.timestampRenderer = null;
     this.timestampProvider = timestampProvider;
   }
@@ -93,7 +93,7 @@ export class VideoProcessor {
       return;
     }
     verboseLog(`Dispatching ${n} chunks`);
-    this.chuckDispatcher.requestChunks(
+    this.sampleManager.requestChunks(
       n,
       (chunk) => {
         this.decoder.decode(chunk);
@@ -122,24 +122,11 @@ export class VideoProcessor {
   }
 
   async processVideo(uri) {
-    let sawChunks = 0;
     this.startProcessVideoTime = performance.now();
     const demuxer = new MP4Demuxer(uri, {
       onConfig: (config) => this.setupDecoder(config),
-      onChunk: (chunk) => {
-        sawChunks++;
-        this.chuckDispatcher.addChunk(chunk);
-        if (this.state === "idle") {
-          this.state = "processing";
-        }
-      },
       setStatus: (phase, message) => this.setStatus(phase, message),
-      onChunkEnd: (sampleProcessed) => {
-        this.nb_samples = sawChunks;
-        verboseLog(`Saw ${sawChunks} chunks`);
-      },
-      timeRangeStart: this.timeRangeStart,
-      timeRangeEnd: this.timeRangeEnd,
+      sampleManager: this.sampleManager,
     });
   }
 
@@ -191,6 +178,11 @@ export class VideoProcessor {
     this.timestampRenderer = this.timestampProvider.isEnabled()
       ? new TimeStampRenderer(this.startTime)
       : null;
+    this.nb_samples = this.sampleManager.finalizeTimeRange(
+      this.timeRangeStart,
+      this.timeRangeEnd
+    );
+    this.state = "processing";
     // Kick off the processing.
     this.dispatch(kDecodeQueueSize);
     if (!isChromeBased) {
@@ -282,25 +274,17 @@ export class VideoProcessor {
 
 // MP4 demuxer class implementation
 class MP4Demuxer {
-  constructor(
-    uri,
-    { onConfig, onChunk, setStatus, onChunkEnd, timeRangeStart, timeRangeEnd }
-  ) {
+  constructor(uri, { onConfig, setStatus, sampleManager }) {
     this.onConfig = onConfig;
-    this.onChunk = onChunk;
     this.setStatus = setStatus;
-    this.onChunkEnd = onChunkEnd;
-    this.timeRangeStart = timeRangeStart;
-    this.timeRangeEnd = timeRangeEnd;
     this.file = MP4Box.createFile();
 
     this.file.onError = (error) => setStatus("demux", error);
     this.file.onReady = this.onReady.bind(this);
     this.file.onSamples = this.onSamples.bind(this);
     this.nb_samples = 0;
-    this.samples_passed = 0;
-    this.samples_processed = 0;
     this.stopProcessingSamples = false;
+    this.sampleManager = sampleManager;
     this.setupFile(uri);
   }
 
@@ -366,90 +350,7 @@ class MP4Demuxer {
 
   onSamples(track_id, ref, samples) {
     if (this.stopProcessingSamples) return;
-    // Must add before the samples array is modified.
-    this.samples_passed += samples.length;
-
-    if (this.timeRangeStart !== undefined) {
-      // Binary search the sample that is closest to the start time and is a keyframe(lower bound).
-      let left = 0;
-      let right = samples.length - 1;
-      let startIndex = 0;
-
-      while (left <= right) {
-        const mid = Math.floor((left + right) / 2);
-        const sampleTimeMs = (samples[mid].cts * 1000) / samples[mid].timescale;
-
-        if (sampleTimeMs < this.timeRangeStart) {
-          left = mid + 1;
-        } else {
-          right = mid - 1;
-        }
-      }
-
-      startIndex = left;
-      // The start is not in the current 1000 samples.
-      // Just return.
-      if (startIndex == samples.length) {
-        return;
-      }
-      // Find the nearest keyframe at or before the desired start time
-      while (startIndex > 0 && !samples[startIndex].is_sync) {
-        startIndex--;
-      }
-
-      // Trim samples array to start from the found keyframe
-      samples = samples.slice(startIndex);
-    }
-
-    let sliceEnd = false;
-    if (this.timeRangeEnd !== undefined) {
-      // Binary search the sample that is closest to the end time and is a keyframe(upper bound).
-      let left = 0;
-      let right = samples.length - 1;
-      let endIndex = samples.length - 1;
-
-      while (left <= right) {
-        const mid = Math.floor((left + right) / 2);
-        const sampleTimeMs = (samples[mid].cts * 1000) / samples[mid].timescale;
-
-        if (sampleTimeMs <= this.timeRangeEnd) {
-          left = mid + 1;
-        } else {
-          right = mid - 1;
-        }
-      }
-
-      // Find the next keyframe after the desired end time
-      endIndex = right;
-      while (endIndex < samples.length - 1 && !samples[endIndex + 1].is_sync) {
-        endIndex++;
-      }
-
-      // Trim samples array to end at the found keyframe
-      if (endIndex < samples.length - 1) {
-        samples = samples.slice(0, endIndex + 1);
-        sliceEnd = true;
-      }
-    }
-
-    for (const sample of samples) {
-      verboseLog(
-        `Sample: sample.cts:${sample.cts}, sample.timescale:${sample.timescale}, sample.duration:${sample.duration}, sample.data.byteLength:${sample.data.byteLength}`
-      );
-      this.onChunk(
-        new EncodedVideoChunk({
-          type: sample.is_sync ? "key" : "delta",
-          timestamp: (1e6 * sample.cts) / sample.timescale,
-          duration: (1e6 * sample.duration) / sample.timescale,
-          data: sample.data,
-        })
-      );
-    }
-    this.samples_processed += samples.length;
-    if (sliceEnd || this.samples_passed === this.nb_samples) {
-      this.stopProcessingSamples = true;
-      this.onChunkEnd(this.samples_processed);
-    }
+    this.sampleManager.addSamples(samples);
   }
 }
 
