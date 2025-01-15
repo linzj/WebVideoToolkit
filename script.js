@@ -1,5 +1,6 @@
 import { ChunkDispatcher } from "./chunkDispatcher.js";
 import { VideoEncoder } from "./videoEncoder.js";
+import { TimeStampRenderer } from "./timeStampRenderer.js";
 import { verboseLog, performanceLog, kDecodeQueueSize } from "./logging.js";
 
 const kEnableVerboseLogging = false;
@@ -29,6 +30,7 @@ class VideoProcessor {
     this.outputTaskPromises = [];
     this.startProcessVideoTime = undefined;
     this.chuckDispatcher = new ChunkDispatcher();
+    this.timestampRenderer = null;
   }
 
   setStatus(phase, message) {
@@ -225,6 +227,7 @@ class VideoProcessor {
     this.frameCountDisplay.textContent = `Processed frames: 0 / ${this.nb_samples}`;
     this.setMatrix(config.matrix);
     this.startTime = this.userStartTime || config.startTime || new Date();
+    this.timestampRenderer = new TimeStampRenderer(this.startTime);
     // Kick off the processing.
     this.dispatch(kDecodeQueueSize);
     if (!isChromeBased) {
@@ -291,34 +294,14 @@ class VideoProcessor {
 
       this.ctx.restore();
 
-      // Convert frame.timestamp (microseconds) to milliseconds and add to startTime
-      let frameTimeMs = Math.floor(frame.timestamp / 1000);
-      if (this.timeRangeStart !== undefined) {
-        frameTimeMs += this.timeRangeStart;
+      // Replace the timestamp drawing code with TimeStampRenderer
+      if (this.timestampRenderer) {
+        let adjustedFrameTimeMs = frameTimeMs;
+        if (this.timeRangeStart !== undefined) {
+          adjustedFrameTimeMs += this.timeRangeStart;
+        }
+        this.timestampRenderer.draw(this.ctx, adjustedFrameTimeMs);
       }
-
-      const frameTime = new Date(this.startTime.getTime() + frameTimeMs);
-      const timestamp = frameTime
-        .toLocaleString("sv", {
-          year: "numeric",
-          month: "2-digit",
-          day: "2-digit",
-          hour: "2-digit",
-          minute: "2-digit",
-          second: "2-digit",
-        })
-        .replace(" ", " "); // Ensure proper spacing
-
-      // Calculate font size based on canvas dimensions
-      const fontSize = Math.min(this.canvas.width, this.canvas.height) * 0.03;
-      this.ctx.fillStyle = "white";
-      this.ctx.font = `${fontSize}px Arial`;
-      this.ctx.textAlign = "right";
-      this.ctx.fillText(
-        timestamp,
-        this.canvas.width - 10,
-        this.canvas.height - 10
-      );
 
       const videoFrameOptions = {
         timestamp: frame.timestamp,
