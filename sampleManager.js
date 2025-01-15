@@ -1,4 +1,8 @@
 export class SampleManager {
+  static sampleTimeMs(sample) {
+    return (sample.cts * 1000) / sample.timescale;
+  }
+
   constructor() {
     this.samples = [];
     this.currentIndex = 0;
@@ -19,16 +23,20 @@ export class SampleManager {
   finalizeTimeRange(timeRangeStart, timeRangeEnd) {
     let startIndex = 0;
     let endIndex = this.samples.length;
+    let preciousStartIndex = 0;
+    let preciousEndIndex = this.samples.length;
 
     if (timeRangeStart !== undefined) {
-      startIndex = this.binarySearchTime(timeRangeStart);
+      startIndex = this.lowerBound(timeRangeStart);
+      preciousStartIndex = startIndex;
       while (startIndex > 0 && !this.samples[startIndex].is_sync) {
         startIndex--;
       }
     }
 
     if (timeRangeEnd !== undefined) {
-      endIndex = this.binarySearchTime(timeRangeEnd);
+      endIndex = this.upperBound(timeRangeEnd);
+      preciousEndIndex = endIndex;
       while (
         endIndex < this.samples.length - 1 &&
         !this.samples[endIndex + 1].is_sync
@@ -38,30 +46,44 @@ export class SampleManager {
       endIndex++;
     }
 
+    const outputTimeRangeStart = SampleManager.sampleTimeMs(
+      this.samples[preciousStartIndex]
+    );
+    const outputTimeRangeEnd = SampleManager.sampleTimeMs(
+      this.samples[preciousEndIndex]
+    );
+
     this.samples = this.samples.slice(startIndex, endIndex);
     this.currentIndex = 0;
     this.finalized = true;
-    return this.samples.length;
+    return [this.samples.length, outputTimeRangeStart, outputTimeRangeEnd];
   }
 
   finalizeSampleInIndex(startIndex, endIndex) {
+    let preciousStartIndex = startIndex;
     while (startIndex > 0 && !this.samples[startIndex].is_sync) {
       startIndex--;
     }
+
+    const outputTimeRangeStart = SampleManager.sampleTimeMs(
+      this.samples[preciousStartIndex]
+    );
+    const outputTimeRangeEnd = SampleManager.sampleTimeMs(
+      this.samples[endIndex]
+    );
     this.samples = this.samples.slice(startIndex, endIndex + 1);
     this.currentIndex = 0;
     this.finalized = true;
-    return this.samples.length;
+    return [this.samples.length, outputTimeRangeStart, outputTimeRangeEnd];
   }
 
-  binarySearchTime(targetTime) {
+  lowerBound(targetTime) {
     let left = 0;
     let right = this.samples.length - 1;
 
     while (left <= right) {
       const mid = Math.floor((left + right) / 2);
-      const sampleTimeMs =
-        (this.samples[mid].cts * 1000) / this.samples[mid].timescale;
+      const sampleTimeMs = SampleManager.sampleTimeMs(this.samples[mid]);
 
       if (sampleTimeMs < targetTime) {
         left = mid + 1;
@@ -71,6 +93,24 @@ export class SampleManager {
     }
 
     return left;
+  }
+
+  upperBound(targetTime) {
+    let left = 0;
+    let right = this.samples.length - 1;
+
+    while (left <= right) {
+      const mid = Math.floor((left + right) / 2);
+      const sampleTimeMs = SampleManager.sampleTimeMs(this.samples[mid]);
+
+      if (sampleTimeMs <= targetTime) {
+        left = mid + 1;
+      } else {
+        right = mid - 1;
+      }
+    }
+
+    return right;
   }
 
   requestChunks(count, onChunk, onExhausted) {

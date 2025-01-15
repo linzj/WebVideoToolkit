@@ -98,8 +98,6 @@ export class VideoProcessor {
   }
 
   async processFileByTime(startMs, endMs) {
-    this.timeRangeStart = startMs;
-    this.timeRangeEnd = endMs;
     this.startProcessVideoTime = performance.now();
 
     if (!this.timestampProvider.validateTimestampInput()) {
@@ -110,10 +108,8 @@ export class VideoProcessor {
     if (!this.timestampProvider.hasValidStartTime()) {
       return;
     }
-    this.nb_samples = this.sampleManager.finalizeTimeRange(
-      this.timeRangeStart,
-      this.timeRangeEnd
-    );
+    [this.nb_samples, this.timeRangeStart, this.timeRangeEnd] =
+      this.sampleManager.finalizeTimeRange(startMs, endMs);
     await this.processFile();
   }
 
@@ -121,10 +117,8 @@ export class VideoProcessor {
     this.startIndex = startIndex;
     this.endIndex = endIndex;
     this.startProcessVideoTime = performance.now();
-    this.nb_samples = this.sampleManager.finalizeSampleInIndex(
-      this.startIndex,
-      this.endIndex
-    );
+    [this.nb_samples, this.timeRangeStart, this.timeRangeEnd] =
+      this.sampleManager.finalizeSampleInIndex(this.startIndex, this.endIndex);
     await this.processFile();
   }
 
@@ -258,18 +252,18 @@ export class VideoProcessor {
 
   async processFrame(frame) {
     const frameTimeMs = Math.floor(frame.timestamp / 1000);
+    if (this.timeRangeStart === undefined || this.timeRangeEnd === undefined) {
+      throw new Error("Time range not set");
+    }
 
     // Skip frames before start time
-    if (
-      this.timeRangeStart !== undefined &&
-      frameTimeMs < this.timeRangeStart
-    ) {
+    if (frameTimeMs < this.timeRangeStart) {
       frame.close();
       return;
     }
 
     // Stop processing after end time
-    if (this.timeRangeEnd !== undefined && frameTimeMs > this.timeRangeEnd) {
+    if (frameTimeMs > this.timeRangeEnd) {
       frame.close();
       return;
     }
