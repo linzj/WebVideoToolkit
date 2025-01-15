@@ -5,6 +5,10 @@ export class SampleManager {
     this.finalized = false;
   }
 
+  sampleCount() {
+    return this.samples.length;
+  }
+
   addSamples(newSamples) {
     if (this.finalized) {
       throw new Error("Cannot add samples to finalized SampleManager");
@@ -40,7 +44,10 @@ export class SampleManager {
     return this.samples.length;
   }
 
-  finalizeSampleCount(startIndex, endIndex) {
+  finalizeSampleInIndex(startIndex, endIndex) {
+    while (startIndex > 0 && !this.samples[startIndex].is_sync) {
+      startIndex--;
+    }
     this.samples = this.samples.slice(startIndex, endIndex + 1);
     this.currentIndex = 0;
     this.finalized = true;

@@ -25,6 +25,9 @@ export class VideoProcessor {
     this.sampleManager = new SampleManager();
     this.timestampRenderer = null;
     this.timestampProvider = timestampProvider;
+    this.startIndex = undefined;
+    this.endIndex = undefined;
+    this.isChromeBased = false;
   }
 
   setStatus(phase, message) {
@@ -65,9 +68,39 @@ export class VideoProcessor {
     }
   }
 
-  async processFile(file, startMs, endMs) {
+  async initFile(file) {
+    if (this.state !== "idle") {
+      throw new Error("Processor is not idle");
+    }
+    this.state = "initializing";
+    try {
+      const videoURL = URL.createObjectURL(file);
+      await this.processVideo(videoURL);
+      URL.revokeObjectURL(videoURL);
+    } catch (error) {
+      console.error("Error processing video:", error);
+      this.setStatus("error", error.message);
+    }
+  }
+
+  async processFile() {
+    if (this.state !== "initialized") {
+      throw new Error("Processor is not initializing");
+    }
+    this.state = "processing";
+    try {
+      this.timerDispatch();
+      this.dispatch(kDecodeQueueSize);
+    } catch (error) {
+      console.error("Error processing video:", error);
+      this.setStatus("error", error.message);
+    }
+  }
+
+  async processFileByTime(startMs, endMs) {
     this.timeRangeStart = startMs;
     this.timeRangeEnd = endMs;
+    this.startProcessVideoTime = performance.now();
 
     if (!this.timestampProvider.validateTimestampInput()) {
       return;
@@ -77,15 +110,22 @@ export class VideoProcessor {
     if (!this.timestampProvider.hasValidStartTime()) {
       return;
     }
+    this.nb_samples = this.sampleManager.finalizeTimeRange(
+      this.timeRangeStart,
+      this.timeRangeEnd
+    );
+    await this.processFile();
+  }
 
-    try {
-      const videoURL = URL.createObjectURL(file);
-      await this.processVideo(videoURL);
-      URL.revokeObjectURL(videoURL);
-    } catch (error) {
-      console.error("Error processing video:", error);
-      this.setStatus("error", error.message);
-    }
+  async processFileByFrame(startIndex, endIndex) {
+    this.startIndex = startIndex;
+    this.endIndex = endIndex;
+    this.startProcessVideoTime = performance.now();
+    this.nb_samples = this.sampleManager.finalizeSampleInIndex(
+      this.startIndex,
+      this.endIndex
+    );
+    await this.processFile();
   }
 
   dispatch(n) {
@@ -112,6 +152,9 @@ export class VideoProcessor {
     if (this.state !== "processing") {
       return;
     }
+    if (this.isChromeBased) {
+      return;
+    }
     setTimeout(() => {
       const n = kDecodeQueueSize - this.decoder.decodeQueueSize; // Number of chunks to request
       if (n > 0) {
@@ -122,7 +165,6 @@ export class VideoProcessor {
   }
 
   async processVideo(uri) {
-    this.startProcessVideoTime = performance.now();
     const demuxer = new MP4Demuxer(uri, {
       onConfig: (config) => this.setupDecoder(config),
       setStatus: (phase, message) => this.setStatus(phase, message),
@@ -137,7 +179,6 @@ export class VideoProcessor {
       error: (e) => console.error(e),
     });
 
-    let isChromeBased = false;
     // If browser is chrome based.
     if (navigator.userAgent.toLowerCase().includes("chrome")) {
       this.decoder.ondequeue = () => {
@@ -149,7 +190,7 @@ export class VideoProcessor {
           this.dispatch(n);
         }
       };
-      isChromeBased = true;
+      this.isChromeBased = true;
     }
 
     await this.decoder.configure(config);
@@ -178,16 +219,41 @@ export class VideoProcessor {
     this.timestampRenderer = this.timestampProvider.isEnabled()
       ? new TimeStampRenderer(this.startTime)
       : null;
-    this.nb_samples = this.sampleManager.finalizeTimeRange(
-      this.timeRangeStart,
-      this.timeRangeEnd
-    );
-    this.state = "processing";
-    // Kick off the processing.
-    this.dispatch(kDecodeQueueSize);
-    if (!isChromeBased) {
-      this.timerDispatch();
+    this.state = "initialized";
+    if (this.onInitialized) {
+      this.onInitialized(this.sampleManager.sampleCount());
     }
+  }
+
+  drawFrame(frame) {
+    this.ctx.save();
+
+    // Apply transformation matrix
+    if (this.matrix) {
+      // Scale the matrix values back from fixed-point to floating-point
+      const scale = 1 / 65536;
+      const [a, b, u, c, d, v, x, y, w] = this.matrix.map((val) => val * scale);
+
+      if (a === -1 && d === -1) {
+        // 180 degree rotation
+        this.ctx.translate(this.canvas.width, this.canvas.height);
+        this.ctx.rotate(Math.PI);
+      } else if (a === 0 && b === 1 && c === -1 && d === 0) {
+        // 90 degree rotation
+        this.ctx.translate(this.canvas.width, 0);
+        this.ctx.rotate(Math.PI / 2);
+      } else if (a === 0 && b === -1 && c === 1 && d === 0) {
+        // 270 degree rotation
+        this.ctx.translate(0, this.canvas.height);
+        this.ctx.rotate(-Math.PI / 2);
+      }
+      // For identity matrix (a=1, d=1) or other transforms, no transformation needed
+    }
+
+    // Draw the frame
+    this.ctx.drawImage(frame, 0, 0);
+
+    this.ctx.restore();
   }
 
   async processFrame(frame) {
@@ -218,37 +284,7 @@ export class VideoProcessor {
     }
 
     try {
-      this.ctx.save();
-
-      // Apply transformation matrix
-      if (this.matrix) {
-        // Scale the matrix values back from fixed-point to floating-point
-        const scale = 1 / 65536;
-        const [a, b, u, c, d, v, x, y, w] = this.matrix.map(
-          (val) => val * scale
-        );
-
-        if (a === -1 && d === -1) {
-          // 180 degree rotation
-          this.ctx.translate(this.canvas.width, this.canvas.height);
-          this.ctx.rotate(Math.PI);
-        } else if (a === 0 && b === 1 && c === -1 && d === 0) {
-          // 90 degree rotation
-          this.ctx.translate(this.canvas.width, 0);
-          this.ctx.rotate(Math.PI / 2);
-        } else if (a === 0 && b === -1 && c === 1 && d === 0) {
-          // 270 degree rotation
-          this.ctx.translate(0, this.canvas.height);
-          this.ctx.rotate(-Math.PI / 2);
-        }
-        // For identity matrix (a=1, d=1) or other transforms, no transformation needed
-      }
-
-      // Draw the frame
-      this.ctx.drawImage(frame, 0, 0);
-
-      this.ctx.restore();
-
+      this.drawFrame(frame);
       // Replace the timestamp drawing code with TimeStampRenderer
       if (this.timestampRenderer) {
         this.timestampRenderer.draw(this.ctx, frameTimeMs);
