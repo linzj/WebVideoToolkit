@@ -24,7 +24,7 @@ export class SampleManager {
     let startIndex = 0;
     let endIndex = this.samples.length;
     let preciousStartIndex = 0;
-    let preciousEndIndex = this.samples.length;
+    let preciousEndIndex = this.samples.length - 1;
 
     if (timeRangeStart !== undefined) {
       startIndex = this.lowerBound(timeRangeStart);
