@@ -31,6 +31,13 @@ class VideoProcessor {
     this.startProcessVideoTime = undefined;
     this.chuckDispatcher = new ChunkDispatcher();
     this.timestampRenderer = null;
+    this.enableTimestampCheckbox = document.getElementById("enableTimestamp");
+    this.timestampInputs = document.getElementById("timestampInputs");
+    
+    // Set up timestamp checkbox handler
+    this.enableTimestampCheckbox.addEventListener("change", () => {
+      this.timestampInputs.classList.toggle("visible", this.enableTimestampCheckbox.checked);
+    });
   }
 
   setStatus(phase, message) {
@@ -227,7 +234,9 @@ class VideoProcessor {
     this.frameCountDisplay.textContent = `Processed frames: 0 / ${this.nb_samples}`;
     this.setMatrix(config.matrix);
     this.startTime = this.userStartTime || config.startTime || new Date();
-    this.timestampRenderer = new TimeStampRenderer(this.startTime);
+    // Only create timestampRenderer if checkbox is checked
+    this.timestampRenderer = this.enableTimestampCheckbox.checked ? 
+      new TimeStampRenderer(this.startTime) : null;
     // Kick off the processing.
     this.dispatch(kDecodeQueueSize);
     if (!isChromeBased) {
