@@ -8,7 +8,7 @@ export class VideoEncoder {
     this.muxer = null;
   }
 
-  async init(width, height, fps) {
+  async init(width, height, fps, useCalculatedBitrate) {
     verboseLog("Initializing encoder with dimensions:", { width, height });
 
     // Calculate maximum dimensions for Level 5.1 (4096x2304)
@@ -64,9 +64,11 @@ export class VideoEncoder {
       codec: "avc1.640033",
       width: targetWidth,
       height: targetHeight,
-      // bitrate: targetBitrate,
       framerate: fps,
     };
+    if (useCalculatedBitrate) {
+      config.bitrate = targetBitrate;
+    }
 
     await this.encoder.configure(config);
   }
