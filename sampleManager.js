@@ -163,6 +163,7 @@ export class SampleManager {
     while (processed < count && this.currentIndex < this.samples.length) {
       const sample = this.samples[this.currentIndex];
       onChunk(SampleManager.encodedVideoChunkFromSample(sample));
+      sample.data = null;
       this.currentIndex++;
       processed++;
     }

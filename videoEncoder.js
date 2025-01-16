@@ -31,7 +31,7 @@ export class VideoEncoder {
     const bitsPerPixel = 0.2;
     const targetBitrate = Math.min(
       Math.floor(pixelCount * bitsPerPixel * 30),
-      50_000_000 // Cap at 50Mbps for Level 5.1
+      30_000_000 // Cap at 30Mbps for Level 5.1
     );
 
     this.muxer = new Mp4Muxer.Muxer({
