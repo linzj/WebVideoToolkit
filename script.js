@@ -42,6 +42,10 @@ document.getElementById("videoInput").addEventListener("change", async (e) => {
       frameRangeSlider.initialize(nb_samples);
       // Enable the process button when processing is initialized
       document.getElementById("processButton").disabled = false;
+
+      frameRangeSlider.onupdatepercentage = (percentage) => {
+        processor.renderSampleInPercentage(percentage);
+      };
     };
     processor.initFile(file);
   }

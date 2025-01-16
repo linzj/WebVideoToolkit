@@ -87,6 +87,10 @@ export class VideoProcessor {
     if (this.state !== "initialized") {
       throw new Error("Processor is not initializing");
     }
+    while (this.previousPromise) {
+      await this.waitForPreviousPromise();
+    }
+
     this.state = "processing";
     try {
       this.timerDispatch();
@@ -169,7 +173,7 @@ export class VideoProcessor {
   async setupDecoder(config) {
     // Initialize the decoder
     this.decoder = new VideoDecoder({
-      output: (frame) => this.outputTaskPromises.push(this.processFrame(frame)),
+      output: (frame) => this.handleDecoderOutput(frame),
       error: (e) => console.error(e),
     });
 
@@ -250,6 +254,19 @@ export class VideoProcessor {
     this.ctx.restore();
   }
 
+  async waitForPreviousPromise() {
+    let tempPromise = this.previousPromise;
+    while (tempPromise) {
+      await tempPromise;
+      if (tempPromise === this.previousPromise) {
+        break;
+      }
+      tempPromise = this.previousPromise;
+    }
+    this.previousPromise = null;
+    return true;
+  }
+
   async processFrame(frame) {
     const frameTimeMs = Math.floor(frame.timestamp / 1000);
     if (this.timeRangeStart === undefined || this.timeRangeEnd === undefined) {
@@ -268,13 +285,16 @@ export class VideoProcessor {
       return;
     }
 
-    let tempPromise = this.previousPromise;
-    while (tempPromise) {
-      await tempPromise;
-      if (tempPromise === this.previousPromise) {
-        break;
-      }
-      tempPromise = this.previousPromise;
+    // let tempPromise = this.previousPromise;
+    // while (tempPromise) {
+    //   await tempPromise;
+    //   if (tempPromise === this.previousPromise) {
+    //     break;
+    //   }
+    //   tempPromise = this.previousPromise;
+    // }
+    while (this.previousPromise) {
+      await this.waitForPreviousPromise();
     }
 
     try {
@@ -299,6 +319,37 @@ export class VideoProcessor {
     } catch (error) {
       console.error("Error processing frame:", error);
     }
+  }
+
+  async handleDecoderOutput(frame) {
+    if (this.state === "processing" || this.state === "exhausted") {
+      this.outputTaskPromises.push(this.processFrame(frame));
+      return;
+    }
+    if (this.state !== "initialized") {
+      frame.close();
+      throw new Error("Processor should be in the initialized state");
+    }
+    this.drawFrame(frame);
+    frame.close();
+  }
+
+  async renderSampleInPercentage(percentage) {
+    if (this.state !== "initialized") {
+      throw new Error("Processor should be in the initialized state");
+    }
+
+    while (this.previousPromise) {
+      await this.waitForPreviousPromise();
+    }
+
+    const samples = this.sampleManager.findSamplesAtPercentage(percentage);
+    for (const sample of samples) {
+      const encodedVideoChunk =
+        SampleManager.encodedVideoChunkFromSample(sample);
+      this.decoder.decode(encodedVideoChunk);
+    }
+    this.previousPromise = this.decoder.flush();
   }
 }
 

@@ -66,8 +66,10 @@ export class FrameRangeSlider {
 
     if (this.isDragging === "thumbStart") {
       this.startPercent = Math.min(percent, this.endPercent - 1);
+      this.onUpdatePercentage(this.startPercent);
     } else {
       this.endPercent = Math.max(percent, this.startPercent + 1);
+      this.onUpdatePercentage(this.endPercent);
     }
 
     this.updateSliderDisplay();
@@ -103,5 +105,11 @@ export class FrameRangeSlider {
       startFrame: Math.floor((this.startPercent / 100) * totalFrames),
       endFrame: Math.floor((this.endPercent / 100) * totalFrames),
     };
+  }
+
+  onUpdatePercentage(percentage) {
+    if (this.onupdatepercentage) {
+      this.onupdatepercentage(percentage);
+    }
   }
 }

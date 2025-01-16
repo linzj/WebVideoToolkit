@@ -3,6 +3,15 @@ export class SampleManager {
     return (sample.cts * 1000) / sample.timescale;
   }
 
+  static encodedVideoChunkFromSample(sample) {
+    return new EncodedVideoChunk({
+      type: sample.is_sync ? "key" : "delta",
+      timestamp: (1e6 * sample.cts) / sample.timescale,
+      duration: (1e6 * sample.duration) / sample.timescale,
+      data: sample.data,
+    });
+  }
+
   constructor() {
     this.samples = [];
     this.currentIndex = 0;
@@ -118,14 +127,7 @@ export class SampleManager {
 
     while (processed < count && this.currentIndex < this.samples.length) {
       const sample = this.samples[this.currentIndex];
-      onChunk(
-        new EncodedVideoChunk({
-          type: sample.is_sync ? "key" : "delta",
-          timestamp: (1e6 * sample.cts) / sample.timescale,
-          duration: (1e6 * sample.duration) / sample.timescale,
-          data: sample.data,
-        })
-      );
+      onChunk(SampleManager.encodedVideoChunkFromSample(sample));
       this.currentIndex++;
       processed++;
     }
@@ -135,6 +137,21 @@ export class SampleManager {
     }
 
     return processed;
+  }
+
+  findSamplesAtPercentage(percentage) {
+    if (this.finalized) {
+      throw new Error("Cannot find sample in finalized SampleManager");
+    }
+    const sampleIndex = Math.floor(
+      (percentage / 100) * (this.samples.length - 1)
+    );
+
+    let keyFrameIndex = sampleIndex;
+    while (keyFrameIndex > 0 && !this.samples[keyFrameIndex].is_sync) {
+      keyFrameIndex--;
+    }
+    return this.samples.slice(keyFrameIndex, sampleIndex + 1);
   }
 
   reset() {
