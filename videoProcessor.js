@@ -193,6 +193,7 @@ export class VideoProcessor {
 
     await this.decoder.configure(config);
     this.setStatus("decode", "Decoder configured");
+    await this.sampleManager.waitForReady();
 
     // Set up canvas dimensions - now using matrix[0] and matrix[1] to detect rotation
     let canvasWidth = undefined;
@@ -364,6 +365,7 @@ class MP4Demuxer {
     this.file.onReady = this.onReady.bind(this);
     this.file.onSamples = this.onSamples.bind(this);
     this.nb_samples = 0;
+    this.passed_samples = 0;
     this.stopProcessingSamples = false;
     this.sampleManager = sampleManager;
     this.setupFile(uri);
@@ -431,7 +433,12 @@ class MP4Demuxer {
 
   onSamples(track_id, ref, samples) {
     if (this.stopProcessingSamples) return;
+    this.passed_samples += samples.length;
     this.sampleManager.addSamples(samples);
+    if (this.passed_samples >= this.nb_samples) {
+      this.stopProcessingSamples = true;
+      this.sampleManager.finalize();
+    }
   }
 }
 

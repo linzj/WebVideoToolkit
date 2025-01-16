@@ -16,6 +16,10 @@ export class SampleManager {
     this.samples = [];
     this.currentIndex = 0;
     this.finalized = false;
+    this.state = "receiving";
+    this.readyPromise = new Promise((resolve) => {
+      this.resolveReadyPromise = resolve;
+    });
   }
 
   sampleCount() {
@@ -27,6 +31,19 @@ export class SampleManager {
       throw new Error("Cannot add samples to finalized SampleManager");
     }
     this.samples.push(...newSamples);
+  }
+
+  async waitForReady() {
+    if (this.state === "finalized") {
+      return;
+    }
+    await this.readyPromise;
+  }
+
+  finalize() {
+    this.resolveReadyPromise();
+    this.resolveReadyPromise = null;
+    this.state = "finalized";
   }
 
   finalizeTimeRange(timeRangeStart, timeRangeEnd) {
