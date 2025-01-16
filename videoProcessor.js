@@ -29,6 +29,8 @@ export class VideoProcessor {
     this.endIndex = undefined;
     this.isChromeBased = false;
     this.previewFrameTimeStamp = 0;
+    this.processingPromise = null;
+    this.processingResolve = null;
   }
 
   setStatus(phase, message) {
@@ -66,6 +68,7 @@ export class VideoProcessor {
           ((endProcessVideoTime - this.startProcessVideoTime) / 1000)
         }`
       );
+      this.processingResolve();
     }
   }
 
@@ -93,6 +96,10 @@ export class VideoProcessor {
     }
 
     this.state = "processing";
+    this.processingPromise = new Promise((resolve) => {
+      this.processingResolve = resolve;
+    });
+
     try {
       this.timerDispatch();
       this.dispatch(kDecodeQueueSize);
@@ -337,7 +344,10 @@ export class VideoProcessor {
       frame.close();
       throw new Error("Processor should be in the initialized state");
     }
-    if (Math.floor(this.previewFrameTimeStamp) !== Math.floor(frame.timestamp / 1000.0)) {
+    if (
+      Math.floor(this.previewFrameTimeStamp) !==
+      Math.floor(frame.timestamp / 1000.0)
+    ) {
       frame.close();
       return;
     }
@@ -370,6 +380,19 @@ export class VideoProcessor {
       this.decoder.decode(encodedVideoChunk);
     }
     this.previousPromise = this.decoder.flush();
+  }
+
+  isProcessing() {
+    return this.state === "processing";
+  }
+
+  async waitForProcessing() {
+    if (this.state === "processing") {
+      return;
+    }
+    if (this.processingPromise) {
+      await this.processingPromise;
+    }
   }
 }
 

@@ -17,13 +17,7 @@ const timestampProvider = new TimeStampProvider({
   timestampInputs: document.getElementById("timestampInputs"),
 });
 
-const processor = new VideoProcessor({
-  canvas: document.getElementById("processorCanvas"),
-  statusElement: document.getElementById("status"),
-  frameCountDisplay: document.getElementById("frameCount"),
-  timestampProvider: timestampProvider,
-  frameRangeSlider: frameRangeSlider,
-});
+let processor = null;
 
 // Event listener for file input
 document.getElementById("videoInput").addEventListener("change", async (e) => {
@@ -38,6 +32,19 @@ document.getElementById("videoInput").addEventListener("change", async (e) => {
     // You'll need to get the total frame count from your video processing logic
     // This might need to be moved to after the video metadata is loaded
     frameRangeSlider.initialize(0); // Initially set to 0, update when frame count is known
+    if (processor != null) {
+      if (processor.isProcessing) {
+        await processor.waitForProcessing();
+      }
+    }
+    processor = new VideoProcessor({
+      canvas: document.getElementById("processorCanvas"),
+      statusElement: document.getElementById("status"),
+      frameCountDisplay: document.getElementById("frameCount"),
+      timestampProvider: timestampProvider,
+      frameRangeSlider: frameRangeSlider,
+    });
+
     processor.onInitialized = (nb_samples) => {
       frameRangeSlider.initialize(nb_samples);
       // Enable the process button when processing is initialized
