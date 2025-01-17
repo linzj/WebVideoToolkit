@@ -27,6 +27,7 @@ export class VideoProcessor {
     this.previewFrameTimeStamp = 0;
     this.processingPromise = null;
     this.processingResolve = null;
+    this.mp4StartTime = undefined;
     this.frameRenderer = new VideoFrameRenderer(this.ctx);
   }
 
@@ -80,7 +81,7 @@ export class VideoProcessor {
 
     let startTime =
       this.timestampProvider.getUserStartTime() ||
-      config.startTime ||
+      this.mp4StartTime ||
       new Date();
     // Only create timestampRenderer if timestamp is enabled
     this.timestampRenderer = this.timestampProvider.isEnabled()
@@ -202,7 +203,8 @@ export class VideoProcessor {
       canvasWidth,
       canvasHeight,
       config.fps,
-      !this.isChromeBased
+      !this.isChromeBased,
+      this.isChromeBased
     );
     this.frame_count = 0;
     this.frameCountDisplay.textContent = `Processed frames: 0 / ${this.nb_samples}`;
@@ -211,6 +213,7 @@ export class VideoProcessor {
       this.onInitialized(this.sampleManager.sampleCount());
     }
     this.frameRenderer.setup(canvasWidth, canvasHeight, config.matrix);
+    this.mp4StartTime = config.startTime;
   }
 
   drawFrame(frame) {

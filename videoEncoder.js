@@ -7,9 +7,12 @@ export class VideoEncoder {
     this.blockingPromiseResolve = null;
     this.muxer = null;
     this.chunks = [];
+    this.fileHandle = null;
+    this.fileStream = null;
+    this.root = null;
   }
 
-  async init(width, height, fps, useCalculatedBitrate) {
+  async init(width, height, fps, useCalculatedBitrate, useFileSystem = false) {
     verboseLog("Initializing encoder with dimensions:", { width, height });
 
     // Calculate maximum dimensions for Level 5.1 (4096x2304)
@@ -34,22 +37,39 @@ export class VideoEncoder {
       30_000_000 // Cap at 30Mbps for Level 5.1
     );
 
-    this.muxer = new Mp4Muxer.Muxer({
-      target: new Mp4Muxer.StreamTarget({
-        chunked: true,
-        onData: (data, position) => {
-          this.chunks.push({ data: new Uint8Array(data), position });
-        }
-      }),
-      fastStart: "fragmented",
-      video: {
-        codec: "avc",
-        width: targetWidth,
-        height: targetHeight,
-      },
-      fastStart: "in-memory",
-      firstTimestampBehavior: "offset",
-    });
+    const tempFileName = `temp-manji.mp4`;
+
+    if (useFileSystem) {
+      this.root = await navigator.storage.getDirectory();
+      this.fileHandle = await this.root.getFileHandle(tempFileName, { create: true });
+      this.fileStream = await this.fileHandle.createWritable();
+      this.muxer = new Mp4Muxer.Muxer({
+        target: new Mp4Muxer.FileSystemWritableFileStreamTarget(this.fileStream),
+        fastStart: false,
+        video: {
+          codec: "avc",
+          width: targetWidth,
+          height: targetHeight,
+        },
+        firstTimestampBehavior: "offset",
+      });
+    } else {
+      this.muxer = new Mp4Muxer.Muxer({
+        target: new Mp4Muxer.StreamTarget({
+          chunked: true,
+          onData: (data, position) => {
+            this.chunks.push({ data: new Uint8Array(data), position });
+          }
+        }),
+        fastStart: "in-memory",
+        video: {
+          codec: "avc",
+          width: targetWidth,
+          height: targetHeight,
+        },
+        firstTimestampBehavior: "offset",
+      });
+    }
 
     this.encoder = new window.VideoEncoder({
       output: (chunk, meta) => this.muxer.addVideoChunk(chunk, meta),
@@ -102,19 +122,32 @@ export class VideoEncoder {
     await this.encoder.flush();
     this.encoder.close();
     this.muxer.finalize();
-    const sortedChunks = this.chunks.sort((a, b) => a.position - b.position);
-    const lastChunk = sortedChunks[sortedChunks.length - 1];
-    const totalSize = lastChunk.position + lastChunk.data.length;
-    const result = new Uint8Array(totalSize);
-    for (const chunk of sortedChunks) {
-      result.set(chunk.data, chunk.position);
+
+    if (this.root && this.fileStream) {  // Check for file system mode
+      await this.fileStream.close();
+      const file = await this.fileHandle.getFile();
+      const url = URL.createObjectURL(file);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "processed-video.mp4";
+      a.click();
+      URL.revokeObjectURL(url);
+      // await this.root.removeEntry(this.tempFileName);
+    } else {
+      const sortedChunks = this.chunks.sort((a, b) => a.position - b.position);
+      const lastChunk = sortedChunks[sortedChunks.length - 1];
+      const totalSize = lastChunk.position + lastChunk.data.length;
+      const result = new Uint8Array(totalSize);
+      for (const chunk of sortedChunks) {
+        result.set(chunk.data, chunk.position);
+      }
+      const blob = new Blob([result], { type: "video/mp4" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "processed-video.mp4";
+      a.click();
+      URL.revokeObjectURL(url);
     }
-    const blob = new Blob([result], { type: "video/mp4" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "processed-video.mp4";
-    a.click();
-    URL.revokeObjectURL(url);
   }
 }
