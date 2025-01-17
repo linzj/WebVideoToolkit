@@ -2,6 +2,7 @@ import { verboseLog, performanceLog, kDecodeQueueSize } from "./logging.js";
 import { SampleManager } from "./sampleManager.js";
 import { VideoEncoder } from "./videoEncoder.js";
 import { TimeStampRenderer } from "./timeStampRenderer.js";
+import { VideoFrameRenderer } from "./videoFrameRenderer.js";
 
 export class VideoProcessor {
   constructor({ canvas, statusElement, frameCountDisplay, timestampProvider }) {
@@ -15,40 +16,22 @@ export class VideoProcessor {
     this.frame_count = 0;
     this.state = "idle";
     this.previousPromise = null;
-    this.matrix = null; // replace this.rotation with this.matrix
-    this.startTime = 0;
     this.timeRangeStart = undefined;
     this.timeRangeEnd = undefined;
-    this.userStartTime = null;
     this.outputTaskPromises = [];
     this.startProcessVideoTime = undefined;
     this.sampleManager = new SampleManager();
     this.timestampRenderer = null;
     this.timestampProvider = timestampProvider;
-    this.startIndex = undefined;
-    this.endIndex = undefined;
     this.isChromeBased = false;
     this.previewFrameTimeStamp = 0;
     this.processingPromise = null;
     this.processingResolve = null;
+    this.frameRenderer = new VideoFrameRenderer(this.ctx);
   }
 
   setStatus(phase, message) {
     this.status.textContent = `${phase}: ${message}`;
-  }
-
-  setMatrix(matrix) {
-    this.matrix = matrix;
-  }
-
-  validateTimestampInput(input) {
-    const regex = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/;
-    if (input.value && !regex.test(input.value)) {
-      alert("Invalid timestamp format. Please use YYYY-MM-DD HH:MM:SS");
-      input.value = "";
-      return false;
-    }
-    return true;
   }
 
   async finalize() {
@@ -95,6 +78,14 @@ export class VideoProcessor {
       await this.waitForPreviousPromise();
     }
 
+    let startTime =
+      this.timestampProvider.getUserStartTime() ||
+      config.startTime ||
+      new Date();
+    // Only create timestampRenderer if timestamp is enabled
+    this.timestampRenderer = this.timestampProvider.isEnabled()
+      ? new TimeStampRenderer(startTime)
+      : null;
     this.state = "processing";
     this.processingPromise = new Promise((resolve) => {
       this.processingResolve = resolve;
@@ -112,25 +103,15 @@ export class VideoProcessor {
   async processFileByTime(startMs, endMs) {
     this.startProcessVideoTime = performance.now();
 
-    if (!this.timestampProvider.validateTimestampInput()) {
-      return;
-    }
-
-    this.userStartTime = this.timestampProvider.getUserStartTime();
-    if (!this.timestampProvider.hasValidStartTime()) {
-      return;
-    }
     [this.nb_samples, this.timeRangeStart, this.timeRangeEnd] =
       this.sampleManager.finalizeTimeRange(startMs, endMs);
     await this.processFile();
   }
 
   async processFileByFrame(startIndex, endIndex) {
-    this.startIndex = startIndex;
-    this.endIndex = endIndex;
     this.startProcessVideoTime = performance.now();
     [this.nb_samples, this.timeRangeStart, this.timeRangeEnd] =
-      this.sampleManager.finalizeSampleInIndex(this.startIndex, this.endIndex);
+      this.sampleManager.finalizeSampleInIndex(startIndex, endIndex);
     await this.processFile();
   }
 
@@ -225,47 +206,16 @@ export class VideoProcessor {
     );
     this.frame_count = 0;
     this.frameCountDisplay.textContent = `Processed frames: 0 / ${this.nb_samples}`;
-    this.setMatrix(config.matrix);
-    this.startTime = this.userStartTime || config.startTime || new Date();
-    // Only create timestampRenderer if timestamp is enabled
-    this.timestampRenderer = this.timestampProvider.isEnabled()
-      ? new TimeStampRenderer(this.startTime)
-      : null;
     this.state = "initialized";
     if (this.onInitialized) {
       this.onInitialized(this.sampleManager.sampleCount());
     }
+    this.frameRenderer.setup(canvasWidth, canvasHeight, config.matrix);
   }
 
   drawFrame(frame) {
-    this.ctx.save();
-
-    // Apply transformation matrix
-    if (this.matrix) {
-      // Scale the matrix values back from fixed-point to floating-point
-      const scale = 1 / 65536;
-      const [a, b, u, c, d, v, x, y, w] = this.matrix.map((val) => val * scale);
-
-      if (a === -1 && d === -1) {
-        // 180 degree rotation
-        this.ctx.translate(this.canvas.width, this.canvas.height);
-        this.ctx.rotate(Math.PI);
-      } else if (a === 0 && b === 1 && c === -1 && d === 0) {
-        // 90 degree rotation
-        this.ctx.translate(this.canvas.width, 0);
-        this.ctx.rotate(Math.PI / 2);
-      } else if (a === 0 && b === -1 && c === 1 && d === 0) {
-        // 270 degree rotation
-        this.ctx.translate(0, this.canvas.height);
-        this.ctx.rotate(-Math.PI / 2);
-      }
-      // For identity matrix (a=1, d=1) or other transforms, no transformation needed
-    }
-
-    // Draw the frame
-    this.ctx.drawImage(frame, 0, 0);
-
-    this.ctx.restore();
+    // Replace logic with a call to frameRenderer
+    this.frameRenderer.drawFrame(frame);
   }
 
   async waitForPreviousPromise() {

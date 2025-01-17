@@ -40,18 +40,15 @@ export class TimeStampProvider {
       return null;
     }
 
+    if (!this.validateTimestampInput()) {
+      return null;
+    }
+
     const startTime = new Date(this.timestampStartInput.value);
     if (isNaN(startTime.getTime())) {
       alert("Invalid date. Please check your input.");
       return null;
     }
     return startTime;
-  }
-
-  hasValidStartTime() {
-    if (!this.timestampStartInput.value) {
-      return true; // No timestamp is considered valid
-    }
-    return this.getUserStartTime() !== null;
   }
 }
