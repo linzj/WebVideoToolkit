@@ -204,7 +204,7 @@ export class VideoProcessor {
       canvasHeight,
       config.fps,
       !this.isChromeBased,
-      this.isChromeBased
+      true
     );
     this.frame_count = 0;
     this.frameCountDisplay.textContent = `Processed frames: 0 / ${this.nb_samples}`;

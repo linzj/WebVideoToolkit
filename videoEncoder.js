@@ -10,6 +10,7 @@ export class VideoEncoder {
     this.fileHandle = null;
     this.fileStream = null;
     this.root = null;
+    this.tempFileName = `temp-manji.mp4`;
   }
 
   async init(width, height, fps, useCalculatedBitrate, useFileSystem = false) {
@@ -37,14 +38,26 @@ export class VideoEncoder {
       30_000_000 // Cap at 30Mbps for Level 5.1
     );
 
-    const tempFileName = `temp-manji.mp4`;
-
     if (useFileSystem) {
-      this.root = await navigator.storage.getDirectory();
-      this.fileHandle = await this.root.getFileHandle(tempFileName, { create: true });
-      this.fileStream = await this.fileHandle.createWritable();
+      this.fileWorker = new Worker("fileWorker.js");
+      this.fileWorker.postMessage({
+        type: "init",
+        data: { fileName: this.tempFileName },
+      });
+
       this.muxer = new Mp4Muxer.Muxer({
-        target: new Mp4Muxer.FileSystemWritableFileStreamTarget(this.fileStream),
+        target: new Mp4Muxer.StreamTarget({
+          chunked: true,
+          onData: (data, position) => {
+            this.fileWorker.postMessage({
+              type: "write",
+              data: {
+                chunk: new Uint8Array(data),
+                position,
+              },
+            });
+          },
+        }),
         fastStart: false,
         video: {
           codec: "avc",
@@ -59,7 +72,7 @@ export class VideoEncoder {
           chunked: true,
           onData: (data, position) => {
             this.chunks.push({ data: new Uint8Array(data), position });
-          }
+          },
         }),
         fastStart: "in-memory",
         video: {
@@ -123,16 +136,28 @@ export class VideoEncoder {
     this.encoder.close();
     this.muxer.finalize();
 
-    if (this.root && this.fileStream) {  // Check for file system mode
-      await this.fileStream.close();
-      const file = await this.fileHandle.getFile();
+    if (this.fileWorker) {
+      this.fileWorker.postMessage({ type: "close" });
+      await new Promise((resolve) => {
+        this.fileWorker.onmessage = (e) => {
+          if (e.data.type === "closed") {
+            this.fileWorker.terminate();
+            resolve();
+          }
+        };
+      });
+
+      const root = await navigator.storage.getDirectory();
+      const fileHandle = await root.getFileHandle(this.tempFileName, {
+        create: false,
+      });
+      const file = await fileHandle.getFile();
       const url = URL.createObjectURL(file);
       const a = document.createElement("a");
       a.href = url;
       a.download = "processed-video.mp4";
       a.click();
       URL.revokeObjectURL(url);
-      // await this.root.removeEntry(this.tempFileName);
     } else {
       const sortedChunks = this.chunks.sort((a, b) => a.position - b.position);
       const lastChunk = sortedChunks[sortedChunks.length - 1];
