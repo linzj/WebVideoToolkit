@@ -3,6 +3,7 @@ import { SampleManager } from "./sampleManager.js";
 import { VideoEncoder } from "./videoEncoder.js";
 import { TimeStampRenderer } from "./timeStampRenderer.js";
 import { VideoFrameRenderer } from "./videoFrameRenderer.js";
+import { VideoDecoder, MP4Demuxer } from "./videoDecoder.js";
 
 export class VideoProcessor {
   constructor({ canvas, statusElement, frameCountDisplay, timestampProvider }) {
@@ -29,6 +30,7 @@ export class VideoProcessor {
     this.processingResolve = null;
     this.mp4StartTime = undefined;
     this.frameRenderer = new VideoFrameRenderer(this.ctx);
+    this.decoder = null;
   }
 
   setStatus(phase, message) {
@@ -143,81 +145,68 @@ export class VideoProcessor {
     if (this.isChromeBased) {
       return;
     }
-    setTimeout(() => {
-      const n = kDecodeQueueSize - this.decoder.decodeQueueSize; // Number of chunks to request
+    this.decoder.startTimerDispatch((n) => {
       if (n > 0) {
         this.dispatch(n);
       }
-      this.timerDispatch(); // Call the timerDispatch function again after 0ms  (next tick) to keep the process running
-    }, 1000);
+      this.timerDispatch();
+    });
   }
 
   async processVideo(uri) {
     const demuxer = new MP4Demuxer(uri, {
-      onConfig: (config) => this.setupDecoder(config),
+      onConfig: (config) => this.setup(config),
       setStatus: (phase, message) => this.setStatus(phase, message),
       sampleManager: this.sampleManager,
     });
   }
 
-  async setupDecoder(config) {
-    // Initialize the decoder
-    this.decoder = new VideoDecoder({
-      output: (frame) => this.handleDecoderOutput(frame),
-      error: (e) => console.error(e),
-    });
-
+  async setup(config) {
     // If browser is chrome based.
     if (navigator.userAgent.toLowerCase().includes("chrome")) {
-      this.decoder.ondequeue = () => {
-        if (this.state !== "processing") {
-          return;
-        }
-        const n = kDecodeQueueSize - this.decoder.decodeQueueSize; // Number of chunks to request
-        if (n > 0) {
-          this.dispatch(n);
-        }
-      };
       this.isChromeBased = true;
     }
-
-    await this.decoder.configure(config);
-    this.setStatus("decode", "Decoder configured");
-    await this.sampleManager.waitForReady();
-
-    // Set up canvas dimensions - now using matrix[0] and matrix[1] to detect rotation
-    let canvasWidth = undefined;
-    let canvasHeight = undefined;
-    if (config.matrix[0] === 0) {
-      // 90 or 270 degree rotation
-      canvasWidth = config.codedHeight;
-      canvasHeight = config.codedWidth;
-    } else {
-      canvasWidth = config.codedWidth;
-      canvasHeight = config.codedHeight;
-    }
-    this.canvas.width = canvasWidth;
-    this.canvas.height = canvasHeight;
-    this.encoder = new VideoEncoder();
-    await this.encoder.init(
-      canvasWidth,
-      canvasHeight,
-      config.fps,
-      !this.isChromeBased,
-      true
+    await this.setupDecoder(config);
+    this.setupCanvas(config.codedWidth, config.codedHeight);
+    await this.setupEncoder(config.codedWidth, config.codedHeight, config.fps);
+    this.frameRenderer.setup(
+      config.codedWidth,
+      config.codedHeight,
+      config.matrix
     );
+    this.mp4StartTime = config.startTime;
     this.frame_count = 0;
     this.frameCountDisplay.textContent = `Processed frames: 0 / ${this.nb_samples}`;
     this.state = "initialized";
     if (this.onInitialized) {
       this.onInitialized(this.sampleManager.sampleCount());
     }
-    this.frameRenderer.setup(canvasWidth, canvasHeight, config.matrix);
-    this.mp4StartTime = config.startTime;
+  }
+
+  async setupDecoder(config) {
+    this.decoder = new VideoDecoder({
+      onFrame: (frame) => this.handleDecoderOutput(frame),
+      onError: (e) => console.error(e),
+      onDequeue: (n) => this.dispatch(n),
+      isChromeBased: this.isChromeBased,
+    });
+
+    await this.decoder.setup(config);
+    this.setStatus("decode", "Decoder configured");
+    await this.sampleManager.waitForReady();
+  }
+
+  setupCanvas(width, height) {
+    this.canvas.width = width;
+    this.canvas.height = height;
+  }
+
+  async setupEncoder(width, height, fps) {
+    this.encoder = new VideoEncoder();
+    await this.encoder.init(width, height, fps, !this.isChromeBased, true);
   }
 
   drawFrame(frame) {
-    // Replace logic with a call to frameRenderer
     this.frameRenderer.drawFrame(frame);
   }
 
@@ -252,21 +241,12 @@ export class VideoProcessor {
       return;
     }
 
-    // let tempPromise = this.previousPromise;
-    // while (tempPromise) {
-    //   await tempPromise;
-    //   if (tempPromise === this.previousPromise) {
-    //     break;
-    //   }
-    //   tempPromise = this.previousPromise;
-    // }
     while (this.previousPromise) {
       await this.waitForPreviousPromise();
     }
 
     try {
       this.drawFrame(frame);
-      // Replace the timestamp drawing code with TimeStampRenderer
       if (this.timestampRenderer) {
         this.timestampRenderer.draw(this.ctx, frameTimeMs);
       }
@@ -346,117 +326,5 @@ export class VideoProcessor {
     if (this.processingPromise) {
       await this.processingPromise;
     }
-  }
-}
-
-// MP4 demuxer class implementation
-class MP4Demuxer {
-  constructor(uri, { onConfig, setStatus, sampleManager }) {
-    this.onConfig = onConfig;
-    this.setStatus = setStatus;
-    this.file = MP4Box.createFile();
-
-    this.file.onError = (error) => setStatus("demux", error);
-    this.file.onReady = this.onReady.bind(this);
-    this.file.onSamples = this.onSamples.bind(this);
-    this.nb_samples = 0;
-    this.passed_samples = 0;
-    this.stopProcessingSamples = false;
-    this.sampleManager = sampleManager;
-    this.setupFile(uri);
-  }
-
-  async setupFile(uri) {
-    const fileSink = new MP4FileSink(this.file, this.setStatus);
-    const response = await fetch(uri);
-    await response.body.pipeTo(
-      new WritableStream(fileSink, { highWaterMark: 2 })
-    );
-  }
-
-  getDescription(track) {
-    const trak = this.file.getTrackById(track.id);
-    for (const entry of trak.mdia.minf.stbl.stsd.entries) {
-      const box = entry.avcC || entry.hvcC || entry.vpcC || entry.av1C;
-      if (box) {
-        const stream = new DataStream(undefined, 0, DataStream.BIG_ENDIAN);
-        box.write(stream);
-        return new Uint8Array(stream.buffer, 8); // Remove the box header.
-      }
-    }
-    throw new Error("avcC, hvcC, vpcC, or av1C box not found");
-  }
-
-  calculateFPS(track) {
-    // Convert duration to seconds using timescale
-    const durationInSeconds = track.duration / track.timescale;
-
-    // Calculate FPS using number of samples (frames) divided by duration
-    const fps = track.nb_samples / durationInSeconds;
-
-    // Round to 2 decimal places for cleaner display
-    return Math.round(fps * 100) / 100;
-  }
-
-  onReady(info) {
-    this.setStatus("demux", "Ready");
-    const track = info.videoTracks[0];
-
-    // Calculate duration in milliseconds
-    const durationMs = (track.duration * 1000) / track.timescale;
-
-    // Create a Date object for startTime
-    const startTime = track.created
-      ? new Date(track.created.getTime() - durationMs)
-      : new Date();
-
-    this.onConfig({
-      codec: track.codec,
-      codedHeight: track.video.height,
-      codedWidth: track.video.width,
-      description: this.getDescription(track),
-      nb_samples: track.nb_samples,
-      matrix: track.matrix, // Pass matrix directly instead of rotation
-      startTime: startTime,
-      fps: this.calculateFPS(track),
-    });
-    this.nb_samples = track.nb_samples;
-
-    this.file.setExtractionOptions(track.id);
-    this.file.start();
-  }
-
-  onSamples(track_id, ref, samples) {
-    if (this.stopProcessingSamples) return;
-    this.passed_samples += samples.length;
-    this.sampleManager.addSamples(samples);
-    if (this.passed_samples >= this.nb_samples) {
-      this.stopProcessingSamples = true;
-      this.sampleManager.finalize();
-    }
-  }
-}
-
-// MP4 file sink implementation
-class MP4FileSink {
-  constructor(file, setStatus) {
-    this.file = file;
-    this.setStatus = setStatus;
-    this.offset = 0;
-  }
-
-  write(chunk) {
-    const buffer = new ArrayBuffer(chunk.byteLength);
-    new Uint8Array(buffer).set(chunk);
-    buffer.fileStart = this.offset;
-    this.offset += buffer.byteLength;
-
-    this.setStatus("fetch", `${(this.offset / 1024 / 1024).toFixed(1)} MB`);
-    this.file.appendBuffer(buffer);
-  }
-
-  close() {
-    this.setStatus("fetch", "Complete");
-    this.file.flush();
   }
 }
