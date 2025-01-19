@@ -4,13 +4,13 @@ import { VideoEncoder } from "./videoEncoder.js";
 import { TimeStampRenderer } from "./timeStampRenderer.js";
 import { VideoFrameRenderer } from "./videoFrameRenderer.js";
 import { VideoDecoder, MP4Demuxer } from "./videoDecoder.js";
+import { PreviewManager } from "./previewManager.js";
 
 export class VideoProcessor {
   constructor({ canvas, statusElement, frameCountDisplay, timestampProvider }) {
     this.canvas = canvas;
     this.ctx = this.canvas.getContext("2d");
     this.status = statusElement;
-    this.mp4File = null;
     this.encoder = null;
     this.frameCountDisplay = frameCountDisplay;
     this.nb_samples = 0;
@@ -25,12 +25,13 @@ export class VideoProcessor {
     this.timestampRenderer = null;
     this.timestampProvider = timestampProvider;
     this.isChromeBased = false;
-    this.previewFrameTimeStamp = 0;
     this.processingPromise = null;
     this.processingResolve = null;
     this.mp4StartTime = undefined;
     this.frameRenderer = new VideoFrameRenderer(this.ctx);
     this.decoder = null;
+    // Preview-related properties
+    this.previewManager = null; // Will hold PreviewManager instance
   }
 
   setStatus(phase, message) {
@@ -77,7 +78,7 @@ export class VideoProcessor {
     if (this.state !== "initialized") {
       throw new Error("Processor is not initializing");
     }
-    while (this.previousPromise) {
+    while (this.hasPreviousPromise) {
       await this.waitForPreviousPromise();
     }
 
@@ -178,6 +179,8 @@ export class VideoProcessor {
     this.frame_count = 0;
     this.frameCountDisplay.textContent = `Processed frames: 0 / ${this.nb_samples}`;
     this.state = "initialized";
+    // Initialize preview manager.
+    this.previewManager = new PreviewManager(this.decoder, this.sampleManager);
     if (this.onInitialized) {
       this.onInitialized(this.sampleManager.sampleCount());
     }
@@ -208,6 +211,10 @@ export class VideoProcessor {
 
   drawFrame(frame) {
     this.frameRenderer.drawFrame(frame);
+  }
+
+  get hasPreviousPromise() {
+    return this.previousPromise !== null;
   }
 
   async waitForPreviousPromise() {
@@ -241,7 +248,7 @@ export class VideoProcessor {
       return;
     }
 
-    while (this.previousPromise) {
+    while (this.hasPreviousPromise) {
       await this.waitForPreviousPromise();
     }
 
@@ -277,42 +284,36 @@ export class VideoProcessor {
       frame.close();
       throw new Error("Processor should be in the initialized state");
     }
-    if (
-      Math.floor(this.previewFrameTimeStamp) !==
-      Math.floor(frame.timestamp / 1000.0)
-    ) {
-      frame.close();
-      return;
-    }
-    this.drawFrame(frame);
+
+    // Final phase: Handle preview frame drawing
+    this.previewManager.drawPreview(frame, (frame) =>
+      this.drawFrame(frame)
+    );
     frame.close();
-    this.previewFrameTimeStamp = 0;
   }
 
+  /**
+   * Handles preview rendering at specified percentage of video
+   * @param {number} percentage - Position in video (0-100)
+   */
   async renderSampleInPercentage(percentage) {
     if (this.state !== "initialized") {
       throw new Error("Processor should be in the initialized state");
     }
 
-    const samples = this.sampleManager.findSamplesAtPercentage(percentage);
-    this.previewFrameTimeStamp = SampleManager.sampleTimeMs(
-      samples[samples.length - 1]
-    );
-    const currentPreviewFrameTs = this.previewFrameTimeStamp;
-    while (this.previousPromise) {
+    // Phase 1: Prepare preview and get handle
+    const previewHandle = this.previewManager.preparePreview(percentage);
+
+    // Wait for any ongoing operations to complete
+    while (this.hasPreviousPromise) {
       await this.waitForPreviousPromise();
     }
 
-    if (currentPreviewFrameTs !== this.previewFrameTimeStamp) {
-      return;
+    // Phase 2: start preview decoding
+    const previewPromise = this.previewManager.executePreview(previewHandle);
+    if (previewPromise) {
+      this.previousPromise = previewPromise;
     }
-
-    for (const sample of samples) {
-      const encodedVideoChunk =
-        SampleManager.encodedVideoChunkFromSample(sample);
-      this.decoder.decode(encodedVideoChunk);
-    }
-    this.previousPromise = this.decoder.flush();
   }
 
   isProcessing() {
