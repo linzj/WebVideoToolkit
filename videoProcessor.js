@@ -6,7 +6,20 @@ import { VideoFrameRenderer } from "./videoFrameRenderer.js";
 import { VideoDecoder, MP4Demuxer } from "./videoDecoder.js";
 import { PreviewManager } from "./previewManager.js";
 
+/**
+ * VideoProcessor handles video processing operations including decoding, frame manipulation,
+ * encoding, and preview generation. It manages the lifecycle of video processing from
+ * initialization to finalization.
+ */
 export class VideoProcessor {
+  /**
+   * Creates a new VideoProcessor instance
+   * @param {Object} config - Configuration object
+   * @param {HTMLCanvasElement} config.canvas - Canvas element for frame rendering
+   * @param {HTMLElement} config.statusElement - Element to display processing status
+   * @param {HTMLElement} config.frameCountDisplay - Element to display frame count
+   * @param {Object} config.timestampProvider - Provider for timestamp operations
+   */
   constructor({ canvas, statusElement, frameCountDisplay, timestampProvider }) {
     this.canvas = canvas;
     this.ctx = this.canvas.getContext("2d");
@@ -34,10 +47,19 @@ export class VideoProcessor {
     this.previewManager = null; // Will hold PreviewManager instance
   }
 
+  /**
+   * Updates the status message displayed to the user
+   * @param {string} phase - Current processing phase
+   * @param {string} message - Status message to display
+   */
   setStatus(phase, message) {
     this.status.textContent = `${phase}: ${message}`;
   }
 
+  /**
+   * Finalizes the video processing, closing encoder and calculating performance metrics
+   * @returns {Promise<void>}
+   */
   async finalize() {
     if (this.outputTaskPromises.length > 0) {
       await Promise.all(this.outputTaskPromises);
@@ -59,6 +81,11 @@ export class VideoProcessor {
     }
   }
 
+  /**
+   * Initializes processing for a given file
+   * @param {File} file - Video file to process
+   * @returns {Promise<void>}
+   */
   async initFile(file) {
     if (this.state !== "idle") {
       throw new Error("Processor is not idle");
@@ -74,6 +101,11 @@ export class VideoProcessor {
     }
   }
 
+  /**
+   * Processes the initialized file with current configuration
+   * @returns {Promise<void>}
+   * @throws {Error} If processor is not in initialized state
+   */
   async processFile() {
     if (this.state !== "initialized") {
       throw new Error("Processor is not initializing");
@@ -104,6 +136,12 @@ export class VideoProcessor {
     }
   }
 
+  /**
+   * Processes file within specified time range
+   * @param {number} startMs - Start time in milliseconds
+   * @param {number} endMs - End time in milliseconds
+   * @returns {Promise<void>}
+   */
   async processFileByTime(startMs, endMs) {
     this.startProcessVideoTime = performance.now();
 
@@ -112,6 +150,12 @@ export class VideoProcessor {
     await this.processFile();
   }
 
+  /**
+   * Processes file for specified frame range
+   * @param {number} startIndex - Starting frame index
+   * @param {number} endIndex - Ending frame index
+   * @returns {Promise<void>}
+   */
   async processFileByFrame(startIndex, endIndex) {
     this.startProcessVideoTime = performance.now();
     [this.nb_samples, this.timeRangeStart, this.timeRangeEnd] =
@@ -119,6 +163,10 @@ export class VideoProcessor {
     await this.processFile();
   }
 
+  /**
+   * Dispatches decode requests to process video chunks
+   * @param {number} n - Number of chunks to dispatch
+   */
   dispatch(n) {
     if (this.state !== "processing") {
       return;
@@ -139,6 +187,9 @@ export class VideoProcessor {
     );
   }
 
+  /**
+   * Initiates timer-based dispatch for non-Chrome browsers
+   */
   timerDispatch() {
     if (this.state !== "processing") {
       return;
@@ -154,6 +205,11 @@ export class VideoProcessor {
     });
   }
 
+  /**
+   * Sets up video processing from URI
+   * @param {string} uri - Video URI to process
+   * @returns {Promise<void>}
+   */
   async processVideo(uri) {
     const demuxer = new MP4Demuxer(uri, {
       onConfig: (config) => this.setup(config),
@@ -162,6 +218,11 @@ export class VideoProcessor {
     });
   }
 
+  /**
+   * Configures processor components with video metadata
+   * @param {Object} config - Video configuration object
+   * @returns {Promise<void>}
+   */
   async setup(config) {
     // If browser is chrome based.
     if (navigator.userAgent.toLowerCase().includes("chrome")) {
@@ -209,27 +270,19 @@ export class VideoProcessor {
     await this.encoder.init(width, height, fps, !this.isChromeBased, true);
   }
 
+  /**
+   * Renders a frame to the canvas
+   * @param {VideoFrame} frame - Frame to render
+   */
   drawFrame(frame) {
     this.frameRenderer.drawFrame(frame);
   }
 
-  get hasPreviousPromise() {
-    return this.previousPromise !== null;
-  }
-
-  async waitForPreviousPromise() {
-    let tempPromise = this.previousPromise;
-    while (tempPromise) {
-      await tempPromise;
-      if (tempPromise === this.previousPromise) {
-        break;
-      }
-      tempPromise = this.previousPromise;
-    }
-    this.previousPromise = null;
-    return true;
-  }
-
+  /**
+   * Processes a single video frame
+   * @param {VideoFrame} frame - Frame to process
+   * @returns {Promise<void>}
+   */
   async processFrame(frame) {
     const frameTimeMs = Math.floor(frame.timestamp / 1000);
     if (this.timeRangeStart === undefined || this.timeRangeEnd === undefined) {
@@ -275,6 +328,11 @@ export class VideoProcessor {
     }
   }
 
+  /**
+   * Handles decoded frames from the decoder
+   * @param {VideoFrame} frame - Decoded video frame
+   * @returns {Promise<void>}
+   */
   async handleDecoderOutput(frame) {
     if (this.state === "processing" || this.state === "exhausted") {
       this.outputTaskPromises.push(this.processFrame(frame));
@@ -293,8 +351,10 @@ export class VideoProcessor {
   }
 
   /**
-   * Handles preview rendering at specified percentage of video
+   * Renders a preview at specified position in video
    * @param {number} percentage - Position in video (0-100)
+   * @returns {Promise<void>}
+   * @throws {Error} If processor is not in initialized state
    */
   async renderSampleInPercentage(percentage) {
     if (this.state !== "initialized") {
@@ -316,10 +376,18 @@ export class VideoProcessor {
     }
   }
 
+  /**
+   * Checks if video is currently being processed
+   * @returns {boolean} True if processing, false otherwise
+   */
   isProcessing() {
     return this.state === "processing";
   }
 
+  /**
+   * Waits for current processing operation to complete
+   * @returns {Promise<void>}
+   */
   async waitForProcessing() {
     if (this.state === "processing") {
       return;
@@ -327,5 +395,30 @@ export class VideoProcessor {
     if (this.processingPromise) {
       await this.processingPromise;
     }
+  }
+
+  /**
+   * Checks if there is a pending promise from previous operations
+   * @returns {boolean} True if there is a pending promise
+   */
+  get hasPreviousPromise() {
+    return this.previousPromise !== null;
+  }
+
+  /**
+   * Waits for any previous promise to complete before proceeding
+   * @returns {Promise<boolean>} Resolves to true when previous promise is completed
+   */
+  async waitForPreviousPromise() {
+    let tempPromise = this.previousPromise;
+    while (tempPromise) {
+      await tempPromise;
+      if (tempPromise === this.previousPromise) {
+        break;
+      }
+      tempPromise = this.previousPromise;
+    }
+    this.previousPromise = null;
+    return true;
   }
 }
