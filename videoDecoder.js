@@ -1,4 +1,5 @@
-import { verboseLog, kDecodeQueueSize } from "./logging.js";
+import { kDecodeQueueSize } from "./logging.js";
+import { DataStream, createFile } from "mp4box";
 
 export class VideoDecoder {
   constructor({ onFrame, onDequeue, onError, isChromeBased }) {
@@ -58,7 +59,7 @@ export class MP4Demuxer {
   constructor(uri, { onConfig, setStatus, sampleManager }) {
     this.onConfig = onConfig;
     this.setStatus = setStatus;
-    this.file = MP4Box.createFile();
+    this.file = createFile();
 
     this.file.onError = (error) => setStatus("demux", error);
     this.file.onReady = this.onReady.bind(this);

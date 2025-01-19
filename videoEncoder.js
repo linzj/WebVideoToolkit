@@ -1,4 +1,5 @@
 import { verboseLog, kEncodeQueueSize } from "./logging.js";
+import { Muxer, StreamTarget } from "mp4-muxer";
 
 export class VideoEncoder {
   constructor() {
@@ -45,8 +46,8 @@ export class VideoEncoder {
         data: { fileName: this.tempFileName },
       });
 
-      this.muxer = new Mp4Muxer.Muxer({
-        target: new Mp4Muxer.StreamTarget({
+      this.muxer = new Muxer({
+        target: new StreamTarget({
           chunked: true,
           onData: (data, position) => {
             this.fileWorker.postMessage({
@@ -67,8 +68,8 @@ export class VideoEncoder {
         firstTimestampBehavior: "offset",
       });
     } else {
-      this.muxer = new Mp4Muxer.Muxer({
-        target: new Mp4Muxer.StreamTarget({
+      this.muxer = new Muxer({
+        target: new StreamTarget({
           chunked: true,
           onData: (data, position) => {
             this.chunks.push({ data: new Uint8Array(data), position });
