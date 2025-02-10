@@ -77,3 +77,13 @@ document.getElementById("processButton").addEventListener("click", async () => {
     processor.status.textContent = "Error processing video";
   }
 });
+
+// Add scale slider event listener
+document.getElementById("scaleSlider").addEventListener("input", async (e) => {
+  const scale = e.target.value / 100;
+  document.getElementById("scaleValue").textContent = `${e.target.value}%`;
+  
+  if (processor && processor.state === "initialized") {
+    await processor.updateScale(scale);
+  }
+});

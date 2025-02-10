@@ -45,6 +45,32 @@ export class VideoProcessor {
     this.decoder = null;
     // Preview-related properties
     this.previewManager = null; // Will hold PreviewManager instance
+    this.lastPreviewPercentage = 0.0;
+    this.scale = 1.0; // Add scale property
+    this.fps = 0;
+    this.videoWidth = 0;
+    this.videoHeight = 0;
+    this.matrix = undefined;
+  }
+
+  // Add update method for scale
+  async updateScale(scale) {
+    this.scale = scale;
+
+    const { width, height } = this.getEncoderDimensions();
+    this.setupCanvas(width, height);
+    // Update frame renderer
+    this.frameRenderer.setup(
+      this.videoWidth,
+      this.videoHeight,
+      this.matrix,
+      scale
+    );
+
+    // If in preview mode, update the preview
+    if (this.state === "initialized") {
+      await this.renderSampleInPercentage(this.lastPreviewPercentage);
+    }
   }
 
   /**
@@ -113,6 +139,8 @@ export class VideoProcessor {
     while (this.hasPreviousPromise) {
       await this.waitForPreviousPromise();
     }
+
+    await this.setupEncoder();
 
     let startTime =
       this.timestampProvider.getUserStartTime() ||
@@ -230,11 +258,15 @@ export class VideoProcessor {
     }
     await this.setupDecoder(config);
     this.setupCanvas(config.codedWidth, config.codedHeight);
-    await this.setupEncoder(config.codedWidth, config.codedHeight, config.fps);
+    this.videoWidth = config.codedWidth;
+    this.videoHeight = config.codedHeight;
+    this.fps = config.fps;
+    this.matrix = config.matrix;
     this.frameRenderer.setup(
       config.codedWidth,
       config.codedHeight,
-      config.matrix
+      config.matrix,
+      this.scale
     );
     this.mp4StartTime = config.startTime;
     this.frame_count = 0;
@@ -265,8 +297,17 @@ export class VideoProcessor {
     this.canvas.height = height;
   }
 
-  async setupEncoder(width, height, fps) {
+  getEncoderDimensions() {
+    // Round up dimensions to multiples of 64
+    const width = Math.ceil((this.videoWidth * this.scale) / 64) * 64;
+    const height = Math.ceil((this.videoHeight * this.scale) / 64) * 64;
+    return { width, height };
+  }
+
+  async setupEncoder() {
     this.encoder = new VideoEncoder();
+    const { width, height } = this.getEncoderDimensions();
+    const fps = this.fps;
     await this.encoder.init(width, height, fps, !this.isChromeBased, true);
   }
 
@@ -344,9 +385,7 @@ export class VideoProcessor {
     }
 
     // Final phase: Handle preview frame drawing
-    this.previewManager.drawPreview(frame, (frame) =>
-      this.drawFrame(frame)
-    );
+    this.previewManager.drawPreview(frame, (frame) => this.drawFrame(frame));
     frame.close();
   }
 
@@ -360,6 +399,8 @@ export class VideoProcessor {
     if (this.state !== "initialized") {
       throw new Error("Processor should be in the initialized state");
     }
+
+    this.lastPreviewPercentage = percentage;
 
     // Phase 1: Prepare preview and get handle
     const previewHandle = this.previewManager.preparePreview(percentage);
