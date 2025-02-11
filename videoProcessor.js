@@ -142,14 +142,20 @@ export class VideoProcessor {
 
     await this.setupEncoder();
 
-    let startTime =
-      this.timestampProvider.getUserStartTime() ||
-      this.mp4StartTime ||
-      new Date();
+    let userStartTime = this.timestampProvider.getUserStartTime();
+
+    let startTime = userStartTime || this.mp4StartTime || new Date();
     // Only create timestampRenderer if timestamp is enabled
     this.timestampRenderer = this.timestampProvider.isEnabled()
       ? new TimeStampRenderer(startTime)
       : null;
+
+    // Synchronize timestamp rendering with user-specified start time
+    // by applying negative timeRangeStart offset. This adjusts the base time
+    // to account for video trimming while maintaining accurate absolute timestamps.
+    if (userStartTime) {
+      this.timestampRenderer.updateExtraTimeOffsetMS(-this.timeRangeStart);
+    }
     this.state = "processing";
     this.processingPromise = new Promise((resolve) => {
       this.processingResolve = resolve;
