@@ -14,6 +14,7 @@ export class SampleManager {
 
   constructor() {
     this.samples = [];
+    this.originalSamples = null;
     this.currentIndex = 0;
     this.finalized = false;
     this.state = "receiving";
@@ -41,12 +42,14 @@ export class SampleManager {
   }
 
   finalize() {
+    this.originalSamples = this.samples;
     this.resolveReadyPromise();
     this.resolveReadyPromise = null;
     this.state = "finalized";
   }
 
   finalizeTimeRange(timeRangeStart, timeRangeEnd) {
+    this.samples = this.originalSamples;
     let startIndex = 0;
     let endIndex = this.samples.length;
     let preciousStartIndex = 0;
@@ -94,6 +97,7 @@ export class SampleManager {
   }
 
   finalizeSampleInIndex(startIndex, endIndex) {
+    this.samples = this.originalSamples;
     let preciousStartIndex = startIndex;
     while (startIndex > 0 && !this.samples[startIndex].is_sync) {
       startIndex--;
@@ -163,7 +167,6 @@ export class SampleManager {
     while (processed < count && this.currentIndex < this.samples.length) {
       const sample = this.samples[this.currentIndex];
       onChunk(SampleManager.encodedVideoChunkFromSample(sample));
-      sample.data = null;
       this.currentIndex++;
       processed++;
     }
@@ -193,6 +196,12 @@ export class SampleManager {
   reset() {
     this.currentIndex = 0;
     this.samples = [];
+    this.originalSamples = null;
+    this.currentIndex = 0;
+    this.finalized = false;
+  }
+
+  resetForReprocessing() {
     this.currentIndex = 0;
     this.finalized = false;
   }

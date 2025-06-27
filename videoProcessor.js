@@ -128,11 +128,23 @@ export class VideoProcessor {
   }
 
   /**
+   * Resets the processor state to 'initialized' if it has been finalized.
+   * This allows for reprocessing of the video with different settings.
+   */
+  resetForReprocessing() {
+    if (this.state === "finalized") {
+      this.state = "initialized";
+      this.sampleManager.resetForReprocessing();
+    }
+  }
+
+  /**
    * Processes the initialized file with current configuration
    * @returns {Promise<void>}
    * @throws {Error} If processor is not in initialized state
    */
   async processFile() {
+    this.resetForReprocessing();
     if (this.state !== "initialized") {
       throw new Error("Processor is not initializing");
     }
@@ -402,6 +414,7 @@ export class VideoProcessor {
    * @throws {Error} If processor is not in initialized state
    */
   async renderSampleInPercentage(percentage) {
+    this.resetForReprocessing();
     if (this.state !== "initialized") {
       throw new Error("Processor should be in the initialized state");
     }
