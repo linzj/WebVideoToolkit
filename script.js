@@ -84,8 +84,22 @@ document.getElementById("processButton").addEventListener("click", async () => {
 document.getElementById("scaleSlider").addEventListener("input", async (e) => {
   const scale = e.target.value / 100;
   document.getElementById("scaleValue").textContent = `${e.target.value}%`;
-  
+
   if (processor && processor.state === "initialized") {
     await processor.updateScale(scale);
+  }
+});
+
+// Event listener for clockwise rotation button
+document.getElementById("rotateCW").addEventListener("click", async () => {
+  if (processor) {
+    await processor.updateRotation((processor.rotation + 90) % 360);
+  }
+});
+
+// Event listener for counter-clockwise rotation button
+document.getElementById("rotateCCW").addEventListener("click", async () => {
+  if (processor) {
+    await processor.updateRotation((processor.rotation - 90 + 360) % 360);
   }
 });

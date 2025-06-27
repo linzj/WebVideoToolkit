@@ -5,6 +5,7 @@ export class VideoFrameRenderer {
     this.width = 0;
     this.height = 0;
     this.scale = 1.0;
+    this.rotation = 0; // Video rotation in degrees
   }
 
   setup(width, height, matrix, scale = 1.0) {
@@ -14,35 +15,46 @@ export class VideoFrameRenderer {
     this.scale = scale;
   }
 
+  /**
+   * Updates the rotation of the video frame.
+   * @param {number} rotation - The new rotation in degrees.
+   */
+  updateRotation(rotation) {
+    this.rotation = rotation;
+  }
+
+  /**
+   * Draws a video frame to the canvas, applying scaling and rotation.
+   * @param {VideoFrame} frame - The video frame to draw.
+   */
   drawFrame(frame) {
     this.ctx.save();
 
-    // Calculate scaled dimensions (round up to 64)
-    const scaledWidth = Math.ceil(this.width * this.scale / 64) * 64;
-    const scaledHeight = Math.ceil(this.height * this.scale / 64) * 64;
+    const canvasWidth = this.ctx.canvas.width;
+    const canvasHeight = this.ctx.canvas.height;
 
-    // Calculate offsets to center the frame
-    const offsetX = (this.width - scaledWidth) / 2;
-    const offsetY = (this.height - scaledHeight) / 2;
+    // Translate to the center of the canvas to rotate around the center
+    this.ctx.translate(canvasWidth / 2, canvasHeight / 2);
+    this.ctx.rotate((this.rotation * Math.PI) / 180);
 
-    if (this.matrix) {
-      const scale = 1 / 65536;
-      const [a, b, u, c, d, v, x, y, w] = this.matrix.map((val) => val * scale);
+    // Calculate the crop dimensions based on the scale
+    const cropWidth = this.width * this.scale;
+    const cropHeight = this.height * this.scale;
+    const cropX = (this.width - cropWidth) / 2;
+    const cropY = (this.height - cropHeight) / 2;
 
-      if (a === -1 && d === -1) {
-        this.ctx.translate(scaledWidth, scaledHeight);
-        this.ctx.rotate(Math.PI);
-      } else if (a === 0 && b === 1 && c === -1 && d === 0) {
-        this.ctx.translate(scaledWidth, 0);
-        this.ctx.rotate(Math.PI / 2);
-      } else if (a === 0 && b === -1 && c === 1 && d === 0) {
-        this.ctx.translate(0, scaledHeight);
-        this.ctx.rotate(-Math.PI / 2);
-      }
-    }
-
-    // Draw the frame with scaling and centering
-    this.ctx.drawImage(frame, -offsetX, -offsetY, this.width, this.height);
+    // Draw the frame, cropped and scaled, centered on the canvas
+    this.ctx.drawImage(
+      frame,
+      cropX,
+      cropY,
+      cropWidth,
+      cropHeight,
+      -cropWidth / 2, // Draw at the center of the rotated canvas
+      -cropHeight / 2, // Draw at the center of the rotated canvas
+      cropWidth,
+      cropHeight
+    );
     this.ctx.restore();
   }
 }
