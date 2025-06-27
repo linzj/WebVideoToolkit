@@ -1,4 +1,12 @@
+/**
+ * Manages a dual-thumb slider for selecting a frame range from a video.
+ * It handles user input, updates the slider's visual representation,
+ * and provides the selected frame range.
+ */
 export class FrameRangeSlider {
+  /**
+   * Initializes the slider by querying DOM elements and setting up initial state.
+   */
   constructor() {
     this.timeSelectionRadios = document.getElementsByName("timeSelection");
     this.sliderContainer = document.querySelector(".slider-container");
@@ -19,6 +27,9 @@ export class FrameRangeSlider {
     this.initializeEventListeners();
   }
 
+  /**
+   * Sets up event listeners for the time selection radio buttons and slider thumbs.
+   */
   initializeEventListeners() {
     this.timeSelectionRadios.forEach((radio) => {
       radio.addEventListener("change", (e) => {
@@ -35,6 +46,10 @@ export class FrameRangeSlider {
     });
   }
 
+  /**
+   * Handles the start of a drag operation on a slider thumb.
+   * @param {MouseEvent|TouchEvent} e - The event object.
+   */
   handleStart(e) {
     e.preventDefault();
     const thumb = e.target;
@@ -55,6 +70,10 @@ export class FrameRangeSlider {
     document.addEventListener("touchend", handleEnd);
   }
 
+  /**
+   * Handles the movement of a slider thumb during a drag operation.
+   * @param {MouseEvent|TouchEvent} e - The event object.
+   */
   handleMove(e) {
     if (!this.isDragging) return;
 
@@ -75,12 +94,19 @@ export class FrameRangeSlider {
     this.updateSliderDisplay();
   }
 
+  /**
+   * Initializes the slider with the total number of frames.
+   * @param {number} totalFrames - The total number of frames in the video.
+   */
   initialize(totalFrames) {
     this.totalFramesDisplay.textContent = totalFrames;
     this.totalFrames = totalFrames;
     this.updateSliderDisplay();
   }
 
+  /**
+   * Updates the visual display of the slider, including thumb positions and frame numbers.
+   */
   updateSliderDisplay() {
     this.thumbStart.style.left = `${this.startPercent}%`;
     this.thumbEnd.style.left = `${this.endPercent}%`;
@@ -95,10 +121,18 @@ export class FrameRangeSlider {
     this.endFrameDisplay.textContent = endFrame;
   }
 
+  /**
+   * Checks if the slider mode is currently active.
+   * @returns {boolean} - True if the slider is visible, false otherwise.
+   */
   isSliderModeActive() {
     return this.sliderContainer.classList.contains("visible");
   }
 
+  /**
+   * Gets the selected frame range.
+   * @returns {{startFrame: number, endFrame: number}} - The start and end frames.
+   */
   getFrameRange() {
     const totalFrames = this.totalFrames;
     return {
@@ -107,6 +141,10 @@ export class FrameRangeSlider {
     };
   }
 
+  /**
+   * Callback function that is called when the percentage of the slider changes.
+   * @param {number} percentage - The new percentage value.
+   */
   onUpdatePercentage(percentage) {
     if (this.onupdatepercentage) {
       this.onupdatepercentage(percentage);

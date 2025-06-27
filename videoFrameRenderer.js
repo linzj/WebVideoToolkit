@@ -1,4 +1,12 @@
+/**
+ * Handles the rendering of video frames to a canvas, including transformations
+ * like scaling and rotation.
+ */
 export class VideoFrameRenderer {
+  /**
+   * Initializes the renderer with a 2D canvas context.
+   * @param {CanvasRenderingContext2D} ctx - The canvas rendering context.
+   */
   constructor(ctx) {
     this.ctx = ctx;
     this.matrix = null;
@@ -8,6 +16,13 @@ export class VideoFrameRenderer {
     this.rotation = 0; // Video rotation in degrees
   }
 
+  /**
+   * Sets up the renderer with video dimensions, matrix, and initial scale.
+   * @param {number} width - The width of the video.
+   * @param {number} height - The height of the video.
+   * @param {Array<number>} matrix - The transformation matrix of the video.
+   * @param {number} [scale=1.0] - The initial scaling factor.
+   */
   setup(width, height, matrix, scale = 1.0) {
     this.width = width;
     this.height = height;

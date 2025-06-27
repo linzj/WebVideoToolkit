@@ -3,14 +3,12 @@ import { TimeRangeProvider } from "./timeRangeProvider.js";
 import { VideoProcessor } from "./videoProcessor.js";
 import { FrameRangeSlider } from "./frameRangeSlider.js";
 
-// Initialize the slider
+// Initialize the slider, time range, and timestamp providers.
 const frameRangeSlider = new FrameRangeSlider();
-
 const timeRangeProvider = new TimeRangeProvider({
   startTimeInput: document.getElementById("startTime"),
   endTimeInput: document.getElementById("endTime"),
 });
-
 const timestampProvider = new TimeStampProvider({
   timestampStartInput: document.getElementById("timestampStart"),
   enableTimestampCheckbox: document.getElementById("enableTimestamp"),
@@ -19,7 +17,10 @@ const timestampProvider = new TimeStampProvider({
 
 let processor = null;
 
-// Event listener for file input
+/**
+ * Event listener for the video input file selection.
+ * Initializes the VideoProcessor with the selected file and sets up callbacks.
+ */
 document.getElementById("videoInput").addEventListener("change", async (e) => {
   const file = e.target.files[0];
   if (!file) {
@@ -27,16 +28,14 @@ document.getElementById("videoInput").addEventListener("change", async (e) => {
     return;
   }
 
-  // Initialize slider when video is loaded
   if (file) {
-    // You'll need to get the total frame count from your video processing logic
-    // This might need to be moved to after the video metadata is loaded
-    frameRangeSlider.initialize(0); // Initially set to 0, update when frame count is known
+    // Reset processor if it exists
     if (processor != null) {
       if (processor.isProcessing) {
         await processor.waitForProcessing();
       }
     }
+    // Initialize the video processor
     processor = new VideoProcessor({
       canvas: document.getElementById("processorCanvas"),
       statusElement: document.getElementById("status"),
@@ -45,11 +44,12 @@ document.getElementById("videoInput").addEventListener("change", async (e) => {
       frameRangeSlider: frameRangeSlider,
     });
 
+    // Set up a callback for when the processor is initialized
     processor.onInitialized = (nb_samples) => {
       frameRangeSlider.initialize(nb_samples);
-      // Enable the process button when processing is initialized
       document.getElementById("processButton").disabled = false;
 
+      // Set up a callback for slider updates
       frameRangeSlider.onupdatepercentage = (percentage) => {
         processor.renderSampleInPercentage(percentage);
       };
@@ -58,7 +58,10 @@ document.getElementById("videoInput").addEventListener("change", async (e) => {
   }
 });
 
-// Add process button click handler
+/**
+ * Event listener for the process button.
+ * Starts video processing based on the selected mode (slider or time range).
+ */
 document.getElementById("processButton").addEventListener("click", async () => {
   const file = document.getElementById("videoInput").files[0];
   if (!file) return;
@@ -80,7 +83,10 @@ document.getElementById("processButton").addEventListener("click", async () => {
   }
 });
 
-// Add scale slider event listener
+/**
+ * Event listener for the scale slider.
+ * Updates the video scale in the processor.
+ */
 document.getElementById("scaleSlider").addEventListener("input", async (e) => {
   const scale = e.target.value / 100;
   document.getElementById("scaleValue").textContent = `${e.target.value}%`;
@@ -90,14 +96,18 @@ document.getElementById("scaleSlider").addEventListener("input", async (e) => {
   }
 });
 
-// Event listener for clockwise rotation button
+/**
+ * Event listener for the clockwise rotation button.
+ */
 document.getElementById("rotateCW").addEventListener("click", async () => {
   if (processor) {
     await processor.updateRotation((processor.rotation + 90) % 360);
   }
 });
 
-// Event listener for counter-clockwise rotation button
+/**
+ * Event listener for the counter-clockwise rotation button.
+ */
 document.getElementById("rotateCCW").addEventListener("click", async () => {
   if (processor) {
     await processor.updateRotation((processor.rotation - 90 + 360) % 360);
