@@ -75,6 +75,8 @@ document.getElementById("processButton").addEventListener("click", async () => {
   } catch (error) {
     console.error("Error processing video:", error);
     processor.status.textContent = "Error processing video";
+  } finally {
+    document.getElementById("processButton").disabled = false;
   }
 });
 
