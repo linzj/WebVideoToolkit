@@ -36,7 +36,7 @@ export class VideoDecoder {
       this.decoder.ondequeue = () => {
         // Number of chunks to request
         const n = kDecodeQueueSize - this.decoder.decodeQueueSize;
-        if (n > 0) {
+        if (n > 0 && this.onDequeue) {
           this.onDequeue(n);
         }
       };

@@ -154,22 +154,22 @@ export class VideoEncoder {
    * @param {VideoFrame} frame - The video frame to encode.
    */
   async encode(frame) {
-    // If the encoder's queue is full, wait until it has drained.
     while (this.encoder.encodeQueueSize > kEncodeQueueSize) {
+      // If a blocking promise already exists, it means another encode call
+      // is already waiting for the queue to drain. We should wait on that
+      // same promise.
       if (this.blockingPromise) {
-        throw new Error("Blocking promise already exists");
+        await this.blockingPromise;
+        // After waiting, we continue the loop to re-check the queue size.
+        continue;
       }
       // Create a promise that will be resolved when the queue has drained.
       this.blockingPromise = new Promise((resolve) => {
         this.blockingPromiseResolve = resolve;
       });
-      verboseLog(
-        `Blocking until queue size is reduced: ${this.encoder.encodeQueueSize}`
-      );
       await this.blockingPromise;
     }
     // Encode the frame and then close it to free up resources.
-    verboseLog("Encoding frame:", frame);
     this.encoder.encode(frame);
     frame.close();
   }
