@@ -1,6 +1,6 @@
 /**
  * Handles the rendering of video frames to a canvas, including transformations
- * like scaling and rotation.
+ * like zooming and rotation.
  */
 export class VideoFrameRenderer {
   /**
@@ -12,22 +12,22 @@ export class VideoFrameRenderer {
     this.matrix = null;
     this.width = 0;
     this.height = 0;
-    this.scale = 1.0;
+    this.zoom = 1.0;
     this.rotation = 0; // Video rotation in degrees
   }
 
   /**
-   * Sets up the renderer with video dimensions, matrix, and initial scale.
+   * Sets up the renderer with video dimensions, matrix, and initial zoom.
    * @param {number} width - The width of the video.
    * @param {number} height - The height of the video.
    * @param {Array<number>} matrix - The transformation matrix of the video.
-   * @param {number} [scale=1.0] - The initial scaling factor.
+   * @param {number} [zoom=1.0] - The initial zoom factor.
    */
-  setup(width, height, matrix, scale = 1.0) {
+  setup(width, height, matrix, zoom = 1.0) {
     this.width = width;
     this.height = height;
     this.matrix = matrix;
-    this.scale = scale;
+    this.zoom = zoom;
   }
 
   /**
@@ -39,7 +39,7 @@ export class VideoFrameRenderer {
   }
 
   /**
-   * Draws a video frame to the canvas, applying scaling and rotation.
+   * Draws a video frame to the canvas, applying zoom and rotation.
    * @param {VideoFrame} frame - The video frame to draw.
    */
   drawFrame(frame) {
@@ -52,13 +52,13 @@ export class VideoFrameRenderer {
     this.ctx.translate(canvasWidth / 2, canvasHeight / 2);
     this.ctx.rotate((this.rotation * Math.PI) / 180);
 
-    // Calculate the crop dimensions based on the scale
-    const cropWidth = this.width * this.scale;
-    const cropHeight = this.height * this.scale;
+    // Calculate the crop dimensions based on the zoom
+    const cropWidth = this.width * this.zoom;
+    const cropHeight = this.height * this.zoom;
     const cropX = (this.width - cropWidth) / 2;
     const cropY = (this.height - cropHeight) / 2;
 
-    // Draw the frame, cropped and scaled, centered on the canvas
+    // Draw the frame, cropped and zoomed, centered on the canvas
     this.ctx.drawImage(
       frame,
       cropX,

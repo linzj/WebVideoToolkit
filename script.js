@@ -84,15 +84,15 @@ document.getElementById("processButton").addEventListener("click", async () => {
 });
 
 /**
- * Event listener for the scale slider.
- * Updates the video scale in the processor.
+ * Event listener for the zoom slider.
+ * Updates the video zoom in the processor.
  */
-document.getElementById("scaleSlider").addEventListener("input", async (e) => {
-  const scale = e.target.value / 100;
-  document.getElementById("scaleValue").textContent = `${e.target.value}%`;
+document.getElementById("zoomSlider").addEventListener("input", async (e) => {
+  const zoom = e.target.value / 100;
+  document.getElementById("zoomValue").textContent = `${e.target.value}%`;
 
   if (processor && processor.state === "initialized") {
-    await processor.updateScale(scale);
+    await processor.updateZoom(zoom);
   }
 });
 

@@ -46,7 +46,7 @@ export class VideoProcessor {
     // Preview-related properties
     this.previewManager = null; // Will hold PreviewManager instance
     this.lastPreviewPercentage = 0.0;
-    this.scale = 1.0; // Add scale property
+    this.zoom = 1.0; // Add zoom property
     this.rotation = 0; // Add rotation property
     this.fps = 0;
     this.videoWidth = 0;
@@ -91,11 +91,11 @@ export class VideoProcessor {
   }
 
   /**
-   * Updates the scale of the video.
-   * @param {number} scale - The new scale value.
+   * Updates the zoom of the video.
+   * @param {number} zoom - The new zoom value.
    */
-  async updateScale(scale) {
-    this.scale = scale;
+  async updateZoom(zoom) {
+    this.zoom = zoom;
 
     const { width, height } = this.getCanvasDimensions();
     this.setupCanvas(width, height);
@@ -104,7 +104,7 @@ export class VideoProcessor {
       this.videoWidth,
       this.videoHeight,
       this.matrix,
-      scale
+      zoom
     );
 
     // If in preview mode, update the preview
@@ -326,7 +326,7 @@ export class VideoProcessor {
       config.codedWidth,
       config.codedHeight,
       config.matrix,
-      this.scale
+      this.zoom
     );
     this.mp4StartTime = config.startTime;
     this.frame_count = 0;
@@ -360,11 +360,11 @@ export class VideoProcessor {
   getCanvasDimensions() {
     const isSideways = this.rotation % 180 !== 0;
     const width = isSideways
-      ? this.videoHeight * this.scale
-      : this.videoWidth * this.scale;
+      ? this.videoHeight * this.zoom
+      : this.videoWidth * this.zoom;
     const height = isSideways
-      ? this.videoWidth * this.scale
-      : this.videoHeight * this.scale;
+      ? this.videoWidth * this.zoom
+      : this.videoHeight * this.zoom;
     return { width, height };
   }
 
@@ -372,11 +372,11 @@ export class VideoProcessor {
     const isSideways = this.rotation % 180 !== 0;
     const width =
       Math.ceil(
-        ((isSideways ? this.videoHeight : this.videoWidth) * this.scale) / 64
+        ((isSideways ? this.videoHeight : this.videoWidth) * this.zoom) / 64
       ) * 64;
     const height =
       Math.ceil(
-        ((isSideways ? this.videoWidth : this.videoHeight) * this.scale) / 64
+        ((isSideways ? this.videoWidth : this.videoHeight) * this.zoom) / 64
       ) * 64;
     return { width, height };
   }
