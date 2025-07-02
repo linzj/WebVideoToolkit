@@ -195,7 +195,7 @@ export class VideoProcessor {
     });
 
     try {
-      this.pipeline.start(this.timeRangeStart, this.timeRangeEnd);
+      await this.pipeline.start(this.timeRangeStart, this.timeRangeEnd);
     } catch (error) {
       console.error("Error processing video:", error);
       this.uiManager.setStatus("error", error.message);
