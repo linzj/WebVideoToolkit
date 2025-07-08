@@ -1,6 +1,14 @@
-import { verboseLog, kDecodeQueueSize } from "./logging.js";
+import {
+  errorLog,
+  warnLog,
+  infoLog,
+  debugLog,
+  verboseLog,
+  kDecodeQueueSize,
+} from "./logging.js";
 import { VideoEncoder } from "./videoEncoder.js";
 import { VideoDecoder } from "./videoDecoder.js";
+import { ResourceManager } from "./resourceManager.js";
 
 /**
  * ProcessingPipeline manages the core video processing flow from decoding through encoding.
@@ -40,6 +48,11 @@ export class ProcessingPipeline {
     this.previousPromise = Promise.resolve();
     this.timeRangeStart = 0;
     this.timeRangeEnd = 0;
+
+    // Initialize resource manager
+    this.resourceManager = new ResourceManager();
+
+    infoLog("ProcessingPipeline", "Processing pipeline initialized");
   }
 
   /**
@@ -58,15 +71,23 @@ export class ProcessingPipeline {
    * @private
    */
   async setupDecoder(config) {
-    this.decoder = new VideoDecoder({
-      onFrame: (frame) => this.handleDecoderOutput(frame),
-      onError: (e) => console.error(e),
-      onDequeue: (n) => this.dispatch(n),
-      isChromeBased: this.isChromeBased,
-    });
+    try {
+      this.decoder = new VideoDecoder({
+        onFrame: (frame) => this.handleDecoderOutput(frame),
+        onError: (e) => {
+          errorLog("ProcessingPipeline", "Decoder error", e);
+        },
+        onDequeue: (n) => this.dispatch(n),
+        isChromeBased: this.isChromeBased,
+      });
 
-    await this.decoder.setup(config);
-    this.uiManager.setStatus("decode", "Decoder configured");
+      await this.decoder.setup(config);
+      this.uiManager.setStatus("decode", "Decoder configured");
+      infoLog("ProcessingPipeline", "Decoder setup complete");
+    } catch (error) {
+      errorLog("ProcessingPipeline", "Failed to setup decoder", error);
+      throw error;
+    }
   }
 
   /**
@@ -178,7 +199,11 @@ export class ProcessingPipeline {
     }
     // In any other state, we just close the frame.
     // Preview frames are handled by the VideoProcessor, not this pipeline.
-    frame.close();
+    this.resourceManager.closeFrame({
+      frame,
+      context: "pipeline",
+      closed: false,
+    });
   }
 
   /**
@@ -195,7 +220,11 @@ export class ProcessingPipeline {
     const frameTimeMs = Math.floor(frame.timestamp / 1000);
 
     if (frameTimeMs < this.timeRangeStart || frameTimeMs > this.timeRangeEnd) {
-      frame.close();
+      this.resourceManager.closeFrame({
+        frame,
+        context: "pipeline-out-of-range",
+        closed: false,
+      });
       return;
     }
 

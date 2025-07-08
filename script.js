@@ -2,6 +2,8 @@ import { TimeStampProvider } from "./timeStampProvider.js";
 import { TimeRangeProvider } from "./timeRangeProvider.js";
 import { VideoProcessor } from "./videoProcessor.js";
 import { FrameRangeSlider } from "./frameRangeSlider.js";
+import { ErrorHandler } from "./errorHandler.js";
+import { infoLog, errorLog } from "./logging.js";
 
 // Initialize the slider, time range, and timestamp providers.
 const frameRangeSlider = new FrameRangeSlider();
@@ -16,6 +18,7 @@ const timestampProvider = new TimeStampProvider({
 });
 
 let processor = null;
+let errorHandler = null;
 
 /**
  * Event listener for the video input file selection.
@@ -28,13 +31,28 @@ document.getElementById("videoInput").addEventListener("change", async (e) => {
     return;
   }
 
-  if (file) {
+  try {
+    // Initialize error handler if not already done
+    if (!errorHandler) {
+      errorHandler = new ErrorHandler({
+        setStatus: (phase, message) => {
+          document.getElementById(
+            "status"
+          ).textContent = `${phase}: ${message}`;
+        },
+      });
+    }
+
     // Reset processor if it exists
     if (processor != null) {
-      if (processor.isProcessing) {
+      if (processor.isProcessing()) {
         await processor.waitForProcessing();
       }
+      processor.shutdown();
     }
+
+    infoLog("Main", "Initializing video processor", { fileName: file.name });
+
     // Initialize the video processor
     processor = new VideoProcessor({
       canvas: document.getElementById("processorCanvas"),
@@ -53,8 +71,17 @@ document.getElementById("videoInput").addEventListener("change", async (e) => {
       frameRangeSlider.onupdatepercentage = (percentage) => {
         processor.renderSampleInPercentage(percentage);
       };
+
+      infoLog("Main", "Video processor initialized", {
+        sampleCount: nb_samples,
+      });
     };
-    processor.initFile(file);
+
+    await processor.initFile(file);
+  } catch (error) {
+    errorLog("Main", "Failed to initialize video processor", error);
+    document.getElementById("processButton").disabled = true;
+    document.getElementById("status").textContent = `Error: ${error.message}`;
   }
 });
 
@@ -68,16 +95,29 @@ document.getElementById("processButton").addEventListener("click", async () => {
 
   try {
     document.getElementById("processButton").disabled = true;
+    infoLog("Main", "Starting video processing");
+
     if (frameRangeSlider.isSliderModeActive()) {
       const { startFrame, endFrame } = frameRangeSlider.getFrameRange();
+      infoLog("Main", "Processing by frame range", { startFrame, endFrame });
       await processor.processFileByFrame(startFrame, endFrame);
     } else {
       const { startMs, endMs } = timeRangeProvider.getTimeRange();
+      infoLog("Main", "Processing by time range", { startMs, endMs });
       await processor.processFileByTime(startMs, endMs);
     }
+
+    infoLog("Main", "Video processing completed successfully");
   } catch (error) {
-    console.error("Error processing video:", error);
-    processor.status.textContent = "Error processing video";
+    errorLog("Main", "Error processing video", error);
+    if (errorHandler) {
+      await errorHandler.handleError(error, "processing", {
+        showToUser: true,
+        critical: false,
+      });
+    } else {
+      document.getElementById("status").textContent = "Error processing video";
+    }
   } finally {
     document.getElementById("processButton").disabled = false;
   }

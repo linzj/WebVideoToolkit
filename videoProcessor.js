@@ -1,9 +1,20 @@
-import { verboseLog, performanceLog, kDecodeQueueSize } from "./logging.js";
+import {
+  errorLog,
+  warnLog,
+  infoLog,
+  debugLog,
+  verboseLog,
+  performanceLog,
+  kDecodeQueueSize,
+} from "./logging.js";
 import { SampleManager } from "./sampleManager.js";
 import { VideoDecoder, MP4Demuxer } from "./videoDecoder.js";
 import { PreviewManager } from "./previewManager.js";
 import { UIManager } from "./uiManager.js";
 import { ProcessingPipeline } from "./processingPipeline.js";
+import { VideoProcessorState } from "./videoProcessorState.js";
+import { ErrorHandler } from "./errorHandler.js";
+import { ResourceManager } from "./resourceManager.js";
 
 /**
  * VideoProcessor orchestrates the entire video processing workflow, including UI management,
@@ -26,16 +37,16 @@ export class VideoProcessor {
       timestampProvider,
     });
 
-    this.state = "idle";
-    this.previousPromise = null; // For preview operations
-    this.startProcessVideoTime = undefined;
+    // Initialize new systems
+    this.stateManager = new VideoProcessorState();
+    this.errorHandler = new ErrorHandler(this.uiManager);
+    this.resourceManager = new ResourceManager();
+
     this.sampleManager = new SampleManager();
     this.timestampProvider = timestampProvider;
     this.isChromeBased = navigator.userAgent.toLowerCase().includes("chrome");
 
-    this.processingPromise = null;
-    this.processingResolve = null;
-
+    this.startProcessVideoTime = undefined;
     this.mp4StartTime = undefined;
     this.decoder = null; // For previewing only
     this.previewManager = null;
@@ -54,6 +65,11 @@ export class VideoProcessor {
     this.timeRangeStart = undefined;
     this.timeRangeEnd = undefined;
     this.pipeline = null;
+
+    // Start periodic cleanup
+    this.resourceManager.startPeriodicCleanup();
+
+    infoLog("VideoProcessor", "VideoProcessor initialized");
   }
 
   /**
@@ -75,6 +91,14 @@ export class VideoProcessor {
       rotation = 180;
     }
     this.updateRotation(rotation);
+  }
+
+  /**
+   * Gets the current state of the processor.
+   * @returns {string} The current state.
+   */
+  get state() {
+    return this.stateManager.getCurrentState();
   }
 
   /**
@@ -109,18 +133,25 @@ export class VideoProcessor {
    * @returns {Promise<void>}
    */
   async finalize() {
-    if (this.state !== "finalized") {
+    if (!this.stateManager.isInState("finalized")) {
       const endProcessVideoTime = performance.now();
+      const totalTime = endProcessVideoTime - this.startProcessVideoTime;
+      const fps = this.frame_count / (totalTime / 1000);
+
       performanceLog(
-        `Total processing time: ${
-          endProcessVideoTime - this.startProcessVideoTime
-        } ms, FPS: ${
-          this.frame_count /
-          ((endProcessVideoTime - this.startProcessVideoTime) / 1000)
-        }`
+        "VideoProcessing",
+        `Total processing time: ${totalTime}ms, FPS: ${fps.toFixed(2)}`,
+        totalTime
       );
-      this.state = "finalized";
-      this.processingResolve();
+
+      this.stateManager.transitionTo("finalized");
+      this.stateManager.resolveProcessing();
+
+      infoLog("VideoProcessor", "Video processing finalized", {
+        totalTime,
+        fps: fps.toFixed(2),
+        frameCount: this.frame_count,
+      });
     }
   }
 
@@ -130,17 +161,43 @@ export class VideoProcessor {
    * @returns {Promise<void>}
    */
   async initFile(file) {
-    if (this.state !== "idle") {
+    // Validate file
+    const validation = this.errorHandler.validateVideoFile(file);
+    if (!validation.isValid) {
+      throw new Error(validation.error);
+    }
+
+    // Check browser support
+    const browserSupport = this.errorHandler.checkBrowserSupport();
+    if (!browserSupport.supported) {
+      throw new Error(
+        `Browser not supported. Missing features: ${browserSupport.missingFeatures.join(
+          ", "
+        )}`
+      );
+    }
+
+    if (!this.stateManager.isInState("idle")) {
       throw new Error("Processor is not idle");
     }
-    this.state = "initializing";
+
+    this.stateManager.transitionTo("initializing");
+    infoLog("VideoProcessor", "Starting file initialization", {
+      fileName: file.name,
+      fileSize: file.size,
+    });
+
     try {
       const videoURL = URL.createObjectURL(file);
       await this.setupDemuxer(videoURL);
       URL.revokeObjectURL(videoURL);
     } catch (error) {
-      console.error("Error processing video:", error);
-      this.uiManager.setStatus("error", error.message);
+      this.stateManager.transitionTo("error");
+      await this.errorHandler.handleError(error, "file loading", {
+        showToUser: true,
+        critical: false,
+      });
+      throw error;
     }
   }
 
@@ -149,9 +206,10 @@ export class VideoProcessor {
    * This allows for reprocessing of the video with different settings.
    */
   resetForReprocessing() {
-    if (this.state === "finalized") {
-      this.state = "initialized";
+    if (this.stateManager.isInState("finalized")) {
+      this.stateManager.transitionTo("initialized");
       this.sampleManager.resetForReprocessing();
+      debugLog("VideoProcessor", "Reset for reprocessing");
     }
   }
 
@@ -162,9 +220,10 @@ export class VideoProcessor {
    */
   async processFile() {
     this.resetForReprocessing();
-    if (this.state !== "initialized") {
+    if (!this.stateManager.isInState("initialized")) {
       throw new Error("Processor is not initialized");
     }
+
     await this.waitForPreviousPromise(); // For preview
 
     this.frame_count = 0;
@@ -187,18 +246,35 @@ export class VideoProcessor {
       fps: this.fps,
     });
 
-    await this.pipeline.setup(this.videoConfig);
+    try {
+      await this.pipeline.setup(this.videoConfig);
+    } catch (error) {
+      await this.errorHandler.handleError(error, "pipeline setup", {
+        showToUser: true,
+        critical: true,
+      });
+      throw error;
+    }
 
-    this.state = "processing";
-    this.processingPromise = new Promise((resolve) => {
-      this.processingResolve = resolve;
+    this.stateManager.transitionTo("processing");
+    let processingResolve;
+    const processingPromise = new Promise((resolve) => {
+      processingResolve = resolve;
     });
+    this.stateManager.setProcessingPromise(
+      processingPromise,
+      processingResolve
+    );
 
     try {
       await this.pipeline.start(this.timeRangeStart, this.timeRangeEnd);
     } catch (error) {
-      console.error("Error processing video:", error);
-      this.uiManager.setStatus("error", error.message);
+      this.stateManager.transitionTo("error");
+      await this.errorHandler.handleError(error, "processing", {
+        showToUser: true,
+        critical: false,
+      });
+      throw error;
     }
   }
 
@@ -250,47 +326,81 @@ export class VideoProcessor {
    * @returns {Promise<void>}
    */
   async setup(config) {
-    this.videoConfig = config;
-    this.videoWidth = config.codedWidth;
-    this.videoHeight = config.codedHeight;
-    this.matrix = config.matrix;
-    this.fps = config.fps;
-    this.mp4StartTime = config.startTime;
+    try {
+      this.videoConfig = config;
+      this.videoWidth = config.codedWidth;
+      this.videoHeight = config.codedHeight;
+      this.matrix = config.matrix;
+      this.fps = config.fps;
+      this.mp4StartTime = config.startTime;
 
-    // Setup decoder for previewing
-    await this.setupPreviewDecoder(config);
+      infoLog("VideoProcessor", "Video configuration received", {
+        width: this.videoWidth,
+        height: this.videoHeight,
+        fps: this.fps,
+        codec: config.codec,
+      });
 
-    this.uiManager.setup(
-      this.videoWidth,
-      this.videoHeight,
-      this.matrix,
-      this.zoom,
-      this.rotation
-    );
-    this.setInitialRotation(this.matrix);
+      // Setup decoder for previewing
+      await this.setupPreviewDecoder(config);
 
-    this.frame_count = 0;
-    this.uiManager.updateFrameCount(0, 0); // Initially 0 samples
+      this.uiManager.setup(
+        this.videoWidth,
+        this.videoHeight,
+        this.matrix,
+        this.zoom,
+        this.rotation
+      );
+      this.setInitialRotation(this.matrix);
 
-    this.state = "initialized";
-    this.previewManager = new PreviewManager(this.decoder, this.sampleManager);
-    if (this.onInitialized) {
-      this.onInitialized(this.sampleManager.sampleCount());
+      this.frame_count = 0;
+      this.uiManager.updateFrameCount(0, 0); // Initially 0 samples
+
+      this.stateManager.transitionTo("initialized");
+      this.previewManager = new PreviewManager(
+        this.decoder,
+        this.sampleManager
+      );
+
+      if (this.onInitialized) {
+        this.onInitialized(this.sampleManager.sampleCount());
+      }
+
+      infoLog("VideoProcessor", "Video processor setup complete");
+    } catch (error) {
+      this.stateManager.transitionTo("error");
+      await this.errorHandler.handleError(error, "initialization", {
+        showToUser: true,
+        critical: true,
+      });
+      throw error;
     }
   }
 
   async setupPreviewDecoder(config) {
-    // This decoder is only for previews. The pipeline will create its own.
-    this.decoder = new VideoDecoder({
-      onFrame: (frame) => this.handlePreviewDecoderOutput(frame),
-      onError: (e) => console.error(e),
-      // No onDequeue for preview decoder, it's driven on demand.
-      isChromeBased: this.isChromeBased,
-    });
+    try {
+      // This decoder is only for previews. The pipeline will create its own.
+      this.decoder = new VideoDecoder({
+        onFrame: (frame) => this.handlePreviewDecoderOutput(frame),
+        onError: (e) => {
+          errorLog("PreviewDecoder", "Decoder error", e);
+        },
+        // No onDequeue for preview decoder, it's driven on demand.
+        isChromeBased: this.isChromeBased,
+      });
 
-    await this.decoder.setup(config);
-    this.uiManager.setStatus("decode", "Preview Decoder configured");
-    await this.sampleManager.waitForReady();
+      await this.decoder.setup(config);
+      this.uiManager.setStatus("decode", "Preview Decoder configured");
+      await this.sampleManager.waitForReady();
+
+      infoLog("VideoProcessor", "Preview decoder setup complete");
+    } catch (error) {
+      await this.errorHandler.handleError(error, "preview decoder setup", {
+        showToUser: true,
+        critical: false,
+      });
+      throw error;
+    }
   }
 
   /**
@@ -299,15 +409,31 @@ export class VideoProcessor {
    * @returns {Promise<void>}
    */
   async handlePreviewDecoderOutput(frame) {
-    if (this.state !== "initialized") {
-      frame.close();
+    if (!this.stateManager.isInState("initialized")) {
+      this.resourceManager.closeFrame({
+        frame,
+        context: "preview",
+        closed: false,
+      });
       throw new Error(
         "Processor should be in the initialized state for previewing"
       );
     }
 
-    this.previewManager.drawPreview(frame, (f) => this.uiManager.drawFrame(f));
-    frame.close();
+    try {
+      await this.resourceManager.processFrame(
+        frame,
+        (f) => {
+          this.previewManager.drawPreview(f, (drawFrame) =>
+            this.uiManager.drawFrame(drawFrame)
+          );
+        },
+        "preview"
+      );
+    } catch (error) {
+      errorLog("VideoProcessor", "Error handling preview frame", error);
+      throw error;
+    }
   }
 
   /**
@@ -318,19 +444,29 @@ export class VideoProcessor {
    */
   async renderSampleInPercentage(percentage) {
     this.resetForReprocessing();
-    if (this.state !== "initialized") {
+    if (!this.stateManager.isInState("initialized")) {
       throw new Error("Processor should be in the initialized state");
     }
 
     this.lastPreviewPercentage = percentage;
+    debugLog("VideoProcessor", `Rendering preview at ${percentage}%`);
 
-    // Phase 1: Prepare preview and get handle
-    const previewHandle = this.previewManager.preparePreview(percentage);
-    await this.waitForPreviousPromise();
-    // Phase 2: start preview decoding
-    const previewPromise = this.previewManager.executePreview(previewHandle);
-    if (previewPromise) {
-      this.previousPromise = previewPromise;
+    try {
+      // Phase 1: Prepare preview and get handle
+      const previewHandle = this.previewManager.preparePreview(percentage);
+      await this.waitForPreviousPromise();
+
+      // Phase 2: start preview decoding
+      const previewPromise = this.previewManager.executePreview(previewHandle);
+      if (previewPromise) {
+        this.stateManager.setPreviousPromise(previewPromise);
+      }
+    } catch (error) {
+      await this.errorHandler.handleError(error, "preview", {
+        showToUser: false,
+        critical: false,
+      });
+      throw error;
     }
   }
 
@@ -339,7 +475,7 @@ export class VideoProcessor {
    * @returns {boolean} True if processing, false otherwise
    */
   isProcessing() {
-    return this.state === "processing";
+    return this.stateManager.isProcessing();
   }
 
   /**
@@ -347,11 +483,12 @@ export class VideoProcessor {
    * @returns {Promise<void>}
    */
   async waitForProcessing() {
-    if (this.state !== "processing" && this.state !== "exhausted") {
+    if (!this.stateManager.isProcessing()) {
       return;
     }
-    if (this.processingPromise) {
-      await this.processingPromise;
+    const processingPromise = this.stateManager.getProcessingPromise();
+    if (processingPromise) {
+      await processingPromise;
     }
   }
 
@@ -360,7 +497,7 @@ export class VideoProcessor {
    * @returns {boolean} True if there is a pending promise
    */
   get hasPreviousPromise() {
-    return this.previousPromise !== null;
+    return this.stateManager.hasPreviousPromise();
   }
 
   /**
@@ -368,15 +505,24 @@ export class VideoProcessor {
    * @returns {Promise<boolean>} Resolves to true when previous promise is completed
    */
   async waitForPreviousPromise() {
-    let tempPromise = this.previousPromise;
+    let tempPromise = this.stateManager.getPreviousPromise();
     while (tempPromise) {
       await tempPromise;
-      if (tempPromise === this.previousPromise) {
+      if (tempPromise === this.stateManager.getPreviousPromise()) {
         break;
       }
-      tempPromise = this.previousPromise;
+      tempPromise = this.stateManager.getPreviousPromise();
     }
-    this.previousPromise = null;
+    this.stateManager.clearPreviousPromise();
     return true;
+  }
+
+  /**
+   * Shuts down the processor and cleans up resources
+   */
+  shutdown() {
+    infoLog("VideoProcessor", "Shutting down video processor");
+    this.resourceManager.shutdown();
+    this.stateManager.reset();
   }
 }
