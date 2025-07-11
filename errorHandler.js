@@ -187,9 +187,9 @@ export class ErrorHandler {
       return { isValid: false, error: "Selected file is not a video" };
     }
 
-    const maxSize = 500 * 1024 * 1024; // 500MB
+    const maxSize = 1500 * 1024 * 1024; // 1.5GB
     if (file.size > maxSize) {
-      return { isValid: false, error: "Video file is too large (max 500MB)" };
+      return { isValid: false, error: "Video file is too large (max 1.5GB)" };
     }
 
     const supportedTypes = [
