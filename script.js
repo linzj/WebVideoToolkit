@@ -72,6 +72,9 @@ document.getElementById("videoInput").addEventListener("change", async (e) => {
         processor.renderSampleInPercentage(percentage);
       };
 
+      // Show initial preview at first frame when file is loaded and samples are ready
+      processor.renderSampleInPercentage(0);
+
       infoLog("Main", "Video processor initialized", {
         sampleCount: nb_samples,
       });
