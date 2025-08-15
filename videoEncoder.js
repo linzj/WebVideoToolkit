@@ -21,6 +21,8 @@ export class VideoEncoder {
     this.fileStream = null; // Writable stream for the output file.
     this.root = null; // Root directory for file system access.
     this.tempFileName = `temp-manji.mp4`; // Temporary file name for the encoded video.
+    this.frameCount = 0; // Track the number of frames encoded.
+    this.fps = 30; // Default fps, will be updated in init().
   }
 
   /**
@@ -36,7 +38,11 @@ export class VideoEncoder {
    * @param {boolean} [useFileSystem=false] - Whether to use the File System Access API for output.
    */
   async init(width, height, fps, useCalculatedBitrate, useFileSystem = false) {
-    verboseLog("Initializing encoder with dimensions:", { width, height });
+    verboseLog("Initializing encoder with dimensions:", { width, height, fps });
+
+    // Store fps for keyframe interval calculation
+    this.fps = fps;
+    this.frameCount = 0; // Reset frame count on init
 
     // Define maximum dimensions for H.264 Level 5.1 (e.g., 4K resolution).
     const maxWidth = 4096;
@@ -50,7 +56,7 @@ export class VideoEncoder {
       const ratio = Math.min(maxWidth / width, maxHeight / height);
       targetWidth = Math.floor(width * ratio);
       targetHeight = Math.floor(height * ratio);
-      console.log("Scaling video to:", { targetWidth, targetHeight });
+      verboseLog("Scaling video to:", { targetWidth, targetHeight });
     }
 
     // Calculate an appropriate bitrate for the video. A common heuristic is 0.2 bits per pixel.
@@ -169,8 +175,24 @@ export class VideoEncoder {
       });
       await this.blockingPromise;
     }
-    // Encode the frame and then close it to free up resources.
-    this.encoder.encode(frame);
+    // Track frame count and force keyframes at regular intervals
+    this.frameCount++;
+
+    // Force a keyframe every fps frames (1 second GOP)
+    // Round fps to nearest integer for keyframe interval calculation
+    const keyframeInterval = Math.round(this.fps);
+    const forceKeyframe = (this.frameCount - 1) % keyframeInterval === 0;
+
+    // Encode the frame with keyframe hint if needed
+    if (forceKeyframe) {
+      verboseLog(
+        `Forcing keyframe at frame ${this.frameCount} (fps: ${this.fps}, interval: ${keyframeInterval})`
+      );
+      this.encoder.encode(frame, { keyFrame: true });
+    } else {
+      this.encoder.encode(frame);
+    }
+
     frame.close();
   }
 
