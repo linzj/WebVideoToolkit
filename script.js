@@ -5,6 +5,39 @@ import { FrameRangeSlider } from "./frameRangeSlider.js";
 import { ErrorHandler } from "./errorHandler.js";
 import { infoLog, errorLog } from "./logging.js";
 
+// Enable controls and hide loading overlay now that JavaScript is ready
+(() => {
+  const controls = [
+    'videoInput',
+    'startTime',
+    'endTime',
+    'enableTimestamp',
+    'timestampStart',
+    'zoomSlider',
+    'rotateCW',
+    'rotateCCW'
+  ];
+
+  controls.forEach((id) => {
+    const el = document.getElementById(id);
+    if (el) el.disabled = false;
+  });
+
+  // Enable radio buttons
+  const radios = document.querySelectorAll('input[name="timeSelection"]');
+  radios.forEach((radio) => {
+    radio.disabled = false;
+  });
+
+  // Hide loading overlay
+  const loadingOverlay = document.getElementById('loadingOverlay');
+  if (loadingOverlay) {
+    loadingOverlay.classList.add('hidden');
+  }
+
+  // processButton remains disabled until video is loaded
+})();
+
 // Initialize the slider, time range, and timestamp providers.
 const frameRangeSlider = new FrameRangeSlider();
 const timeRangeProvider = new TimeRangeProvider({

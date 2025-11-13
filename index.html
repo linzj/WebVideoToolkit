@@ -119,10 +119,59 @@
             font-size: 0.9em;
             color: #666;
         }
+
+        #loadingOverlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(255, 255, 255, 0.9);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+            font-size: 1.2em;
+            color: #333;
+        }
+
+        #loadingOverlay.hidden {
+            display: none;
+        }
     </style>
+    <script>
+        // Disable all interactive controls immediately before page renders
+        document.addEventListener('DOMContentLoaded', function() {
+            const controls = [
+                'videoInput',
+                'startTime',
+                'endTime',
+                'enableTimestamp',
+                'timestampStart',
+                'zoomSlider',
+                'rotateCW',
+                'rotateCCW',
+                'processButton'
+            ];
+
+            controls.forEach(function(id) {
+                const el = document.getElementById(id);
+                if (el) el.disabled = true;
+            });
+
+            // Disable radio buttons
+            const radios = document.querySelectorAll('input[name="timeSelection"]');
+            radios.forEach(function(radio) {
+                radio.disabled = true;
+            });
+        });
+    </script>
 </head>
 
 <body>
+    <div id="loadingOverlay">
+        <div>Loading application...</div>
+    </div>
     <h1>Video Frame Processor</h1>
     <input type="file" id="videoInput" accept="video/*">
     <div class="time-selection-toggle">
