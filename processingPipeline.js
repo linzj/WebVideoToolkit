@@ -157,9 +157,23 @@ export class ProcessingPipeline {
       async () => {
         this.state = "exhausted";
         await this.decoder.flush();
-        if (this.decoder.decodeQueueSize == 0) {
-          this.finalize();
+
+        // Wait for decoder queue to drain
+        let decoderTimeout = 0;
+        while (this.decoder.decodeQueueSize > 0 && decoderTimeout < 200) {
+          await new Promise(resolve => setTimeout(resolve, 50));
+          decoderTimeout++;
         }
+
+        // Wait for encoder queue to drain
+        let encoderTimeout = 0;
+        while (this.encoder.encodeQueueSize > 0 && encoderTimeout < 200) {
+          await new Promise(resolve => setTimeout(resolve, 50));
+          encoderTimeout++;
+        }
+
+        // Both queues are empty, safe to finalize
+        await this.finalize();
       }
     );
   }
@@ -254,11 +268,8 @@ export class ProcessingPipeline {
    * finalizes the encoder, and calls the onFinalized callback.
    */
   async finalize() {
-    if (this.state === "finalized") return;
-
-    if (this.outputTaskPromises.length > 0) {
-      await Promise.all(this.outputTaskPromises);
-      this.outputTaskPromises = [];
+    if (this.state === "finalized") {
+      return;
     }
 
     this.state = "finalized";

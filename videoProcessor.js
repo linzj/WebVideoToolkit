@@ -257,6 +257,10 @@ export class VideoProcessor {
     }
 
     this.stateManager.transitionTo("processing");
+
+    // Pause cleanup during processing to prevent frames from being closed prematurely
+    this.resourceManager.pauseCleanup();
+
     let processingResolve;
     const processingPromise = new Promise((resolve) => {
       processingResolve = resolve;
@@ -275,6 +279,9 @@ export class VideoProcessor {
         critical: false,
       });
       throw error;
+    } finally {
+      // Resume cleanup after processing completes (success or failure)
+      this.resourceManager.resumeCleanup();
     }
   }
 

@@ -9,6 +9,7 @@ export class ResourceManager {
     this.maxPoolSize = 10;
     this.cleanupCallbacks = [];
     this.isShuttingDown = false;
+    this.cleanupPaused = false;
   }
 
   /**
@@ -163,8 +164,24 @@ export class ResourceManager {
    */
   startPeriodicCleanup(intervalMs = 10000) {
     this.cleanupInterval = setInterval(() => {
-      this.cleanupOldFrames();
+      if (!this.cleanupPaused) {
+        this.cleanupOldFrames();
+      }
     }, intervalMs);
+  }
+
+  /**
+   * Pauses automatic cleanup during critical operations (e.g., video processing).
+   */
+  pauseCleanup() {
+    this.cleanupPaused = true;
+  }
+
+  /**
+   * Resumes automatic cleanup after critical operations complete.
+   */
+  resumeCleanup() {
+    this.cleanupPaused = false;
   }
 
   /**

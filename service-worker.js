@@ -69,22 +69,29 @@ self.addEventListener('fetch', (event) => {
           return cachedResponse;
         }
 
-        const response = await fetch(request);
-        if (response.ok) {
-          const cache = await caches.open(CACHE_NAME);
-          cache.put(request, response.clone());
-          console.log('[Service Worker] Cached new asset:', request.url);
+        try {
+          const response = await fetch(request);
+          if (response && response.ok) {
+            const cache = await caches.open(CACHE_NAME);
+            const responseToCache = response.clone();
+            cache.put(request, responseToCache);
+            console.log('[Service Worker] Cached new asset:', request.url);
+          }
+          return response;
+        } catch (error) {
+          console.error('[Service Worker] Fetch failed:', request.url, error);
+          throw error;
         }
-        return response;
       }
 
       // Strategy 2: Network-first for HTML (always check for updates)
       if (request.mode === 'navigate' || request.url.endsWith('.html')) {
         try {
           const response = await fetch(request);
-          if (response.ok) {
+          if (response && response.ok) {
             const cache = await caches.open(CACHE_NAME);
-            cache.put(request, response.clone());
+            const responseToCache = response.clone();
+            cache.put(request, responseToCache);
             console.log('[Service Worker] Updated HTML cache:', request.url);
           }
           return response;
@@ -101,14 +108,22 @@ self.addEventListener('fetch', (event) => {
 
       // Strategy 3: Stale-while-revalidate for other assets (bundle.js without hash)
       const cachedResponse = await caches.match(request);
-      const fetchPromise = fetch(request).then((response) => {
-        if (response.ok) {
-          const cache = caches.open(CACHE_NAME);
-          cache.then((c) => c.put(request, response.clone()));
-          console.log('[Service Worker] Background updated:', request.url);
+
+      // Start fetching in background
+      const fetchPromise = fetch(request).then(async (response) => {
+        if (response && response.ok) {
+          try {
+            const cache = await caches.open(CACHE_NAME);
+            const responseToCache = response.clone();
+            await cache.put(request, responseToCache);
+            console.log('[Service Worker] Background updated:', request.url);
+          } catch (error) {
+            console.warn('[Service Worker] Cache update failed:', request.url, error);
+          }
         }
         return response;
-      }).catch(() => {
+      }).catch((error) => {
+        console.warn('[Service Worker] Fetch failed:', request.url, error);
         // Network error, return cached version if available
         return cachedResponse;
       });

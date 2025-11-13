@@ -58,6 +58,7 @@ export default {
     new CopyWebpackPlugin({
       patterns: [
         { from: "service-worker.js", to: "service-worker.js" },
+        { from: "fileWorker.js", to: "fileWorker.js" },
       ],
     }),
   ],

@@ -136,6 +136,11 @@ export class VideoEncoder {
         this.blockingPromise = null;
         this.blockingPromiseResolve = null;
       }
+
+      // Notify callback when queue becomes empty
+      if (this.encoder.encodeQueueSize === 0 && this.onQueueEmpty) {
+        this.onQueueEmpty();
+      }
     };
 
     // Configure the encoder with the specified video parameters.
@@ -150,6 +155,22 @@ export class VideoEncoder {
     }
 
     await this.encoder.configure(config);
+  }
+
+  /**
+   * Sets a callback to be invoked when the encoder queue becomes empty.
+   * @param {Function} callback - Function to call when queue is empty.
+   */
+  setQueueEmptyCallback(callback) {
+    this.onQueueEmpty = callback;
+  }
+
+  /**
+   * Gets the current encode queue size.
+   * @returns {number} The number of frames in the encode queue.
+   */
+  get encodeQueueSize() {
+    return this.encoder ? this.encoder.encodeQueueSize : 0;
   }
 
   /**
@@ -211,13 +232,28 @@ export class VideoEncoder {
     // If using the file system, finalize the file and provide a download link.
     if (this.fileWorker) {
       this.fileWorker.postMessage({ type: "close" });
-      // Wait for the file worker to confirm that the file has been closed.
-      await new Promise((resolve) => {
+
+      // Wait for the file worker to confirm that the file has been closed, with timeout
+      await new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          console.warn('[VideoEncoder] File worker timeout, continuing anyway');
+          this.fileWorker.terminate();
+          resolve();
+        }, 5000);
+
         this.fileWorker.onmessage = (e) => {
           if (e.data.type === "closed") {
+            clearTimeout(timeout);
             this.fileWorker.terminate();
             resolve();
           }
+        };
+
+        this.fileWorker.onerror = (error) => {
+          clearTimeout(timeout);
+          console.error('[VideoEncoder] File worker error:', error);
+          this.fileWorker.terminate();
+          reject(error);
         };
       });
 
