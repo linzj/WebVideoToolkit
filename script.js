@@ -5,34 +5,101 @@ import { FrameRangeSlider } from "./frameRangeSlider.js";
 import { ErrorHandler } from "./errorHandler.js";
 import { infoLog, errorLog } from "./logging.js";
 
+// Register Service Worker for caching and offline support
+// This runs asynchronously and won't block the main application
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('./service-worker.js')
+      .then((registration) => {
+        console.log('[App] Service Worker registered:', registration.scope);
+
+        // Check for updates periodically
+        setInterval(() => {
+          registration.update();
+        }, 60000); // Check every minute
+
+        // Listen for updates
+        registration.addEventListener('updatefound', () => {
+          const newWorker = registration.installing;
+          console.log('[App] Service Worker update found');
+
+          newWorker.addEventListener('statechange', () => {
+            if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+              // New service worker available
+              console.log('[App] New version available');
+              showUpdateNotification();
+            }
+          });
+        });
+      })
+      .catch((error) => {
+        console.warn('[App] Service Worker registration failed:', error);
+        // Service worker failure is not critical - app still works
+      });
+  });
+} else {
+  console.info('[App] Service Worker not supported, using standard caching');
+}
+
+// Show update notification to user
+function showUpdateNotification() {
+  const status = document.getElementById('status');
+  if (status && !status.textContent.includes('New version')) {
+    const originalText = status.textContent;
+    status.textContent = '🔄 New version available - Refresh to update';
+    status.style.backgroundColor = '#4CAF50';
+    status.style.color = 'white';
+    status.style.cursor = 'pointer';
+    status.onclick = () => {
+      window.location.reload();
+    };
+
+    // Auto-revert after 10 seconds if not clicked
+    setTimeout(() => {
+      if (status.textContent.includes('New version')) {
+        status.textContent = originalText;
+        status.style.backgroundColor = '';
+        status.style.color = '';
+        status.style.cursor = '';
+        status.onclick = null;
+      }
+    }, 10000);
+  }
+}
+
 // Enable controls and hide loading overlay now that JavaScript is ready
+// Wrapped in try-catch to ensure loading overlay is always hidden
 (() => {
-  const controls = [
-    'videoInput',
-    'startTime',
-    'endTime',
-    'enableTimestamp',
-    'timestampStart',
-    'zoomSlider',
-    'rotateCW',
-    'rotateCCW'
-  ];
+  try {
+    const controls = [
+      'videoInput',
+      'startTime',
+      'endTime',
+      'enableTimestamp',
+      'timestampStart',
+      'zoomSlider',
+      'rotateCW',
+      'rotateCCW'
+    ];
 
-  controls.forEach((id) => {
-    const el = document.getElementById(id);
-    if (el) el.disabled = false;
-  });
+    controls.forEach((id) => {
+      const el = document.getElementById(id);
+      if (el) el.disabled = false;
+    });
 
-  // Enable radio buttons
-  const radios = document.querySelectorAll('input[name="timeSelection"]');
-  radios.forEach((radio) => {
-    radio.disabled = false;
-  });
-
-  // Hide loading overlay
-  const loadingOverlay = document.getElementById('loadingOverlay');
-  if (loadingOverlay) {
-    loadingOverlay.classList.add('hidden');
+    // Enable radio buttons
+    const radios = document.querySelectorAll('input[name="timeSelection"]');
+    radios.forEach((radio) => {
+      radio.disabled = false;
+    });
+  } catch (error) {
+    console.error('[App] Error enabling controls:', error);
+  } finally {
+    // ALWAYS hide loading overlay, even if there are errors above
+    const loadingOverlay = document.getElementById('loadingOverlay');
+    if (loadingOverlay) {
+      loadingOverlay.classList.add('hidden');
+    }
   }
 
   // processButton remains disabled until video is loaded

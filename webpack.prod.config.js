@@ -7,13 +7,13 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 export default {
-  mode: "development",
+  mode: "production",
   entry: "./script.js",
-  devtool: "source-map",
+  devtool: false, // No source maps in production
   output: {
-    filename: "bundle.js",
+    filename: "[name].[contenthash].js",
     path: path.resolve(__dirname, "dist"),
-    sourceMapFilename: "bundle.js.map",
+    clean: true, // Clean dist folder before each build
   },
   module: {
     rules: [
@@ -29,10 +29,31 @@ export default {
       },
     ],
   },
+  optimization: {
+    moduleIds: 'deterministic',
+    runtimeChunk: 'single',
+    splitChunks: {
+      cacheGroups: {
+        vendor: {
+          test: /[\\/]node_modules[\\/]/,
+          name: 'vendors',
+          chunks: 'all',
+          priority: 10,
+        },
+      },
+    },
+  },
   plugins: [
     new HtmlWebpackPlugin({
       template: "./index.html",
       inject: 'body',
+      scriptLoading: 'defer',
+      minify: {
+        collapseWhitespace: true,
+        removeComments: true,
+        removeRedundantAttributes: true,
+        useShortDoctype: true,
+      },
     }),
     new CopyWebpackPlugin({
       patterns: [
@@ -42,5 +63,10 @@ export default {
   ],
   resolve: {
     extensions: ['.js']
-  }
+  },
+  performance: {
+    hints: 'warning',
+    maxEntrypointSize: 512000,
+    maxAssetSize: 512000,
+  },
 };
