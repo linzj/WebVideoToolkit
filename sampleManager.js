@@ -36,9 +36,105 @@ export class SampleManager {
     this.currentIndex = 0;
     this.finalized = false;
     this.state = "receiving"; // Initial state
+    this.dataLoader = null; // Injected by the demuxer: loads sample data for a byte range
+    this.pendingLoad = null; // In-flight data loading promise
     this.readyPromise = new Promise((resolve) => {
       this.resolveReadyPromise = resolve;
     });
+  }
+
+  /**
+   * Sets the lightweight sample index (entries without data).
+   * @param {Array<object>} entries - The index entries.
+   */
+  setIndex(entries) {
+    this.samples = entries;
+    this.originalSamples = entries;
+  }
+
+  /**
+   * Injects the data loader used to fetch sample data on demand.
+   * @param {function} loader - async (byteStart, byteEnd, firstSampleNumber, expectedCount) => void.
+   *   Extracted sample data is delivered back via backFillData.
+   */
+  setDataLoader(loader) {
+    this.dataLoader = loader;
+  }
+
+  /**
+   * Back-fills extracted sample data into the index entries.
+   * @param {Array<object>} samples - Samples with number and data fields.
+   */
+  backFillData(samples) {
+    if (!this.originalSamples) return;
+    for (const sample of samples) {
+      const entry = this.originalSamples[sample.number];
+      if (entry) {
+        entry.data = sample.data;
+      }
+    }
+  }
+
+  /**
+   * Ensures the sample data for the given index range (inclusive) is loaded.
+   * Reads only the byte range covering the missing samples from the source file.
+   * Concurrent/overlapping requests are serialized and merged.
+   * @param {number} startIndex - The first sample index.
+   * @param {number} endIndex - The last sample index (inclusive).
+   * @returns {Promise<void>}
+   */
+  async ensureSampleData(startIndex, endIndex) {
+    startIndex = Math.max(0, startIndex);
+    endIndex = Math.min(endIndex, this.originalSamples.length - 1);
+
+    // Wait for any in-flight load, then re-check what is still missing.
+    while (this.pendingLoad) {
+      await this.pendingLoad;
+    }
+
+    let first = -1;
+    let last = -1;
+    for (let i = startIndex; i <= endIndex; i++) {
+      if (!this.originalSamples[i].data) {
+        if (first < 0) first = i;
+        last = i;
+      }
+    }
+    if (first < 0) return; // Everything already loaded.
+
+    // Byte range covering [first, last]; holes from interleaved audio are negligible.
+    let minOffset = Infinity;
+    let maxEnd = 0;
+    for (let i = first; i <= last; i++) {
+      const sample = this.originalSamples[i];
+      if (sample.offset < minOffset) minOffset = sample.offset;
+      if (sample.offset + sample.size > maxEnd) maxEnd = sample.offset + sample.size;
+    }
+
+    const loadPromise = this.dataLoader(
+      minOffset,
+      maxEnd,
+      first,
+      last - first + 1
+    );
+    this.pendingLoad = loadPromise;
+    try {
+      await loadPromise;
+    } finally {
+      this.pendingLoad = null;
+    }
+  }
+
+  /**
+   * Releases all loaded sample data, returning the memory to the GC.
+   */
+  releaseSampleData() {
+    if (!this.originalSamples) return;
+    for (const entry of this.originalSamples) {
+      if (entry.data) {
+        entry.data = undefined;
+      }
+    }
   }
 
   /**
@@ -47,18 +143,6 @@ export class SampleManager {
    */
   sampleCount() {
     return this.samples.length;
-  }
-
-  /**
-   * Adds new samples to the manager.
-   * @param {Array<object>} newSamples - An array of new samples to add.
-   * @throws {Error} If called after the manager is finalized.
-   */
-  addSamples(newSamples) {
-    if (this.finalized) {
-      throw new Error("Cannot add samples to finalized SampleManager");
-    }
-    this.samples.push(...newSamples);
   }
 
   /**
@@ -73,7 +157,7 @@ export class SampleManager {
   }
 
   /**
-   * Finalizes the initial sample loading, making the manager ready for processing.
+   * Marks the sample index as ready, making the manager ready for processing.
    */
   finalize() {
     this.originalSamples = this.samples;
@@ -83,12 +167,13 @@ export class SampleManager {
   }
 
   /**
-   * Finalizes the sample list to a specific time range.
+   * Finalizes the sample list to a specific time range, loading the sample
+   * data for the required decode range (keyframe-based) on demand.
    * @param {number} timeRangeStart - The start time in milliseconds.
    * @param {number} timeRangeEnd - The end time in milliseconds.
-   * @returns {[number, number, number]} - The number of samples, and the actual start and end times.
+   * @returns {Promise<[number, number, number]>} - The number of samples, and the actual start and end times.
    */
-  finalizeTimeRange(timeRangeStart, timeRangeEnd) {
+  async finalizeTimeRange(timeRangeStart, timeRangeEnd) {
     this.samples = this.originalSamples;
     let startIndex = 0;
     let endIndex = this.samples.length;
@@ -132,6 +217,9 @@ export class SampleManager {
       this.samples[preciousEndIndex]
     );
 
+    // Load the sample data for the decode range (endIndex is exclusive here).
+    await this.ensureSampleData(startIndex, endIndex - 1);
+
     this.samples = this.samples.slice(startIndex, endIndex);
     this.currentIndex = 0;
     this.finalized = true;
@@ -139,12 +227,13 @@ export class SampleManager {
   }
 
   /**
-   * Finalizes the sample list to a specific index range.
+   * Finalizes the sample list to a specific index range, loading the sample
+   * data for the required decode range (keyframe-based) on demand.
    * @param {number} startIndex - The starting sample index.
    * @param {number} endIndex - The ending sample index.
-   * @returns {[number, number, number]} - The number of samples, and the actual start and end times.
+   * @returns {Promise<[number, number, number]>} - The number of samples, and the actual start and end times.
    */
-  finalizeSampleInIndex(startIndex, endIndex) {
+  async finalizeSampleInIndex(startIndex, endIndex) {
     this.samples = this.originalSamples;
     let preciousStartIndex = startIndex;
     // Rewind to the previous keyframe
@@ -169,6 +258,10 @@ export class SampleManager {
     const outputTimeRangeEnd = SampleManager.sampleTimeMs(
       this.samples[endIndex]
     );
+
+    // Load the sample data for the decode range (endIndex is inclusive here).
+    await this.ensureSampleData(startIndex, endIndex);
+
     this.samples = this.samples.slice(startIndex, endIndex + 1);
     this.currentIndex = 0;
     this.finalized = true;

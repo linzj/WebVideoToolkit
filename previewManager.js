@@ -18,15 +18,20 @@ export class PreviewManager {
   }
 
   /**
-   * Phase 1: Prepares samples for preview at given percentage position
+   * Phase 1: Prepares samples for preview at given percentage position,
+   * loading the sample data for the keyframe-to-target range on demand.
    * @param {number} percentage - Position in video (0-100)
-   * @returns {number} Timestamp to be used as handle for this preview request
+   * @returns {Promise<number>} Timestamp to be used as handle for this preview request
    */
-  preparePreview(percentage) {
+  async preparePreview(percentage) {
     const samples = this.sampleManager.findSamplesAtPercentage(percentage);
     const timeStamp = SampleManager.sampleTimeMs(samples[samples.length - 1]);
     this.samples = samples;
     this.previewFrameTimeStamp = timeStamp;
+    await this.sampleManager.ensureSampleData(
+      samples[0].number,
+      samples[samples.length - 1].number
+    );
     return timeStamp;
   }
 

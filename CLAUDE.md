@@ -34,8 +34,8 @@ This keeps the git history clean and professional.
 
 The video processing follows a pipeline architecture:
 
-1. **File Input** → `MP4Demuxer` (videoDecoder.js) extracts video samples and metadata
-2. **Sample Management** → `SampleManager` (sampleManager.js) buffers and manages video samples
+1. **File Input** → `MP4Demuxer` (videoDecoder.js) parses only the moov box (head/tail byte ranges of the File) to build a lightweight sample index; sample data is read on demand via `File.slice`
+2. **Sample Management** → `SampleManager` (sampleManager.js) stores the sample index and loads/releases sample data on demand (`ensureSampleData`/`releaseSampleData`)
 3. **Decoding** → `VideoDecoder` wrapper decodes frames using WebCodecs API
 4. **Processing** → Frames are drawn to canvas with transformations and timestamp overlay
 5. **Encoding** → `VideoEncoder` re-encodes frames with H.264 codec
@@ -56,7 +56,8 @@ The video processing follows a pipeline architecture:
 - Browser-specific handling: Chrome uses `ondequeue` events, others use timer-based dispatch
 
 **SampleManager (sampleManager.js)**
-- Stores video samples (compressed chunks) from demuxer
+- Stores a lightweight sample index (offset/size/cts/is_sync, no data) built from the moov box
+- Loads compressed sample data lazily per byte range via the demuxer's data loader
 - Provides time-range and frame-range selection
 - Handles keyframe seeking (rewinds to previous keyframe for decodability)
 - Supplies chunks to decoder on demand

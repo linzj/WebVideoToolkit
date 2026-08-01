@@ -147,6 +147,9 @@ export class VideoProcessor {
       this.stateManager.transitionTo("finalized");
       this.stateManager.resolveProcessing();
 
+      // Release the loaded sample data; the index is kept for reprocessing.
+      this.sampleManager.releaseSampleData();
+
       infoLog("VideoProcessor", "Video processing finalized", {
         totalTime,
         fps: fps.toFixed(2),
@@ -188,9 +191,7 @@ export class VideoProcessor {
     });
 
     try {
-      const videoURL = URL.createObjectURL(file);
-      await this.setupDemuxer(videoURL);
-      URL.revokeObjectURL(videoURL);
+      await this.setupDemuxer(file);
     } catch (error) {
       this.stateManager.transitionTo("error");
       await this.errorHandler.handleError(error, "file loading", {
@@ -295,7 +296,7 @@ export class VideoProcessor {
     this.startProcessVideoTime = performance.now();
 
     [this.nb_samples, this.timeRangeStart, this.timeRangeEnd] =
-      this.sampleManager.finalizeTimeRange(startMs, endMs);
+      await this.sampleManager.finalizeTimeRange(startMs, endMs);
     this.uiManager.updateFrameCount(0, this.nb_samples);
     await this.processFile();
   }
@@ -309,18 +310,18 @@ export class VideoProcessor {
   async processFileByFrame(startIndex, endIndex) {
     this.startProcessVideoTime = performance.now();
     [this.nb_samples, this.timeRangeStart, this.timeRangeEnd] =
-      this.sampleManager.finalizeSampleInIndex(startIndex, endIndex);
+      await this.sampleManager.finalizeSampleInIndex(startIndex, endIndex);
     this.uiManager.updateFrameCount(0, this.nb_samples);
     await this.processFile();
   }
 
   /**
-   * Sets up video processing from URI
-   * @param {string} uri - Video URI to process
+   * Sets up video processing from a File
+   * @param {File} file - Video file to process
    * @returns {Promise<void>}
    */
-  async setupDemuxer(uri) {
-    const demuxer = new MP4Demuxer(uri, {
+  async setupDemuxer(file) {
+    this.demuxer = new MP4Demuxer(file, {
       onConfig: (config) => this.setup(config),
       setStatus: (phase, message) => this.uiManager.setStatus(phase, message),
       sampleManager: this.sampleManager,
@@ -428,6 +429,14 @@ export class VideoProcessor {
     }
 
     try {
+      // Frames before the seek target (within the GOP) are discarded
+      // immediately without going through the full drawing pipeline.
+      const targetMs = this.previewManager?.previewFrameTimeStamp ?? 0;
+      if (Math.floor(frame.timestamp / 1000) < Math.floor(targetMs)) {
+        frame.close();
+        return;
+      }
+
       await this.resourceManager.processFrame(
         frame,
         (f) => {
@@ -459,9 +468,17 @@ export class VideoProcessor {
     debugLog("VideoProcessor", `Rendering preview at ${percentage}%`);
 
     try {
-      // Phase 1: Prepare preview and get handle
-      const previewHandle = this.previewManager.preparePreview(percentage);
+      // Phase 1: Prepare preview (loads the sample data on demand) and get handle
+      const previewHandle = await this.previewManager.preparePreview(percentage);
       await this.waitForPreviousPromise();
+
+      // A newer preview request arrived while waiting; skip decoding this one.
+      if (this.lastPreviewPercentage !== percentage) {
+        return;
+      }
+
+      // Reset the decoder so chunks from a previous position are not reused.
+      await this.decoder.resetAndConfigure(this.videoConfig);
 
       // Phase 2: start preview decoding
       const previewPromise = this.previewManager.executePreview(previewHandle);
@@ -529,6 +546,8 @@ export class VideoProcessor {
    */
   shutdown() {
     infoLog("VideoProcessor", "Shutting down video processor");
+    this.demuxer?.shutdown();
+    this.demuxer = null;
     this.resourceManager.shutdown();
     this.stateManager.reset();
   }

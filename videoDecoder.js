@@ -46,6 +46,17 @@ export class VideoDecoder {
   }
 
   /**
+   * Resets the decoder and reconfigures it. Used before each preview seek so
+   * that chunks from a previous, unrelated position are not fed to the decoder.
+   * @param {object} config - The video decoder configuration.
+   */
+  async resetAndConfigure(config) {
+    if (!this.decoder) return;
+    this.decoder.reset();
+    await this.decoder.configure(config);
+  }
+
+  /**
    * Starts a timer-based dispatch mechanism for non-Chrome browsers.
    * @param {function} onDispatch - The function to call to dispatch more data.
    */
@@ -89,42 +100,104 @@ export class VideoDecoder {
 }
 
 /**
- * Demuxes an MP4 file to extract video samples and configuration.
+ * Demuxes an MP4 file lazily: only the moov box is parsed up front to build a
+ * lightweight sample index; sample data is read from the source File on demand
+ * via byte-range slices.
  */
 export class MP4Demuxer {
   /**
    * Initializes the MP4Demuxer.
-   * @param {string} uri - The URI of the MP4 file.
+   * @param {File} file - The source MP4 File object.
    * @param {object} config - The configuration object.
    * @param {function} config.onConfig - Callback with the video configuration.
    * @param {function} config.setStatus - Callback to update the status.
-   * @param {SampleManager} config.sampleManager - The sample manager to handle extracted samples.
+   * @param {SampleManager} config.sampleManager - The sample manager to handle the sample index and data.
    */
-  constructor(uri, { onConfig, setStatus, sampleManager }) {
+  constructor(file, { onConfig, setStatus, sampleManager }) {
     this.onConfig = onConfig;
     this.setStatus = setStatus;
+    this.sourceFile = file;
     this.file = createFile();
 
     this.file.onError = (error) => setStatus("demux", error);
     this.file.onReady = this.onReady.bind(this);
     this.file.onSamples = this.onSamples.bind(this);
     this.nb_samples = 0;
-    this.passed_samples = 0;
-    this.stopProcessingSamples = false;
+    this.moovReady = false;
+    this.pendingExtraction = null;
     this.sampleManager = sampleManager;
-    this.setupFile(uri);
+    this.setupFile(file);
   }
 
   /**
-   * Fetches the MP4 file and pipes it to the demuxer.
-   * @param {string} uri - The URI of the MP4 file.
+   * Appends a byte range of the source file to the mp4box parser.
+   * @param {number} start - Start offset (inclusive).
+   * @param {number} end - End offset (exclusive).
    */
-  async setupFile(uri) {
-    const fileSink = new MP4FileSink(this.file, this.setStatus);
-    const response = await fetch(uri);
-    await response.body.pipeTo(
-      new WritableStream(fileSink, { highWaterMark: 2 })
-    );
+  async appendRange(start, end) {
+    const buffer = await this.sourceFile.slice(start, end).arrayBuffer();
+    buffer.fileStart = start;
+    this.setStatus("fetch", `${(end / 1024 / 1024).toFixed(1)} MB`);
+    this.file.appendBuffer(buffer);
+  }
+
+  /**
+   * Reads just enough of the file to locate and parse the moov box:
+   * first the head, then the tail (moov at end of file), and as a last
+   * resort the whole file sequentially.
+   * @param {File} file - The source MP4 File object.
+   */
+  async setupFile(file) {
+    const CHUNK_SIZE = 8 * 1024 * 1024;
+    const headSize = Math.min(file.size, CHUNK_SIZE);
+
+    // 1. Read the head of the file.
+    await this.appendRange(0, headSize);
+    if (this.moovReady) return;
+
+    // 2. moov not in the head: try the tail (faststart not applied).
+    if (file.size > headSize) {
+      const tailSize = Math.min(file.size - headSize, CHUNK_SIZE);
+      await this.appendRange(file.size - tailSize, file.size);
+      if (this.moovReady) return;
+    }
+
+    // 3. Fallback: read the whole file sequentially.
+    for (let pos = headSize; pos < file.size && !this.moovReady; pos += CHUNK_SIZE) {
+      await this.appendRange(pos, Math.min(pos + CHUNK_SIZE, file.size));
+    }
+    if (!this.moovReady) {
+      throw new Error("Failed to locate the moov box in the file");
+    }
+  }
+
+  /**
+   * Reads the bytes covering the given sample range and extracts the samples.
+   * Resolves once expectedCount samples have been delivered via onSamples.
+   * @param {number} byteStart - Start offset of the byte range (inclusive).
+   * @param {number} byteEnd - End offset of the byte range (exclusive).
+   * @param {number} firstSampleNumber - Number of the first sample in the range.
+   * @param {number} expectedCount - Number of samples expected in the range.
+   * @returns {Promise<void>}
+   */
+  async extractRange(byteStart, byteEnd, firstSampleNumber, expectedCount) {
+    if (this.pendingExtraction) {
+      throw new Error("An extraction is already in progress");
+    }
+    const buffer = await this.sourceFile.slice(byteStart, byteEnd).arrayBuffer();
+    buffer.fileStart = byteStart;
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        this.file.stop();
+        this.pendingExtraction = null;
+        reject(new Error("Sample extraction timed out"));
+      }, 30000);
+      this.pendingExtraction = { resolve, reject, timeout, received: 0, expectedCount };
+      this.file.appendBuffer(buffer);
+      this.trak.nextSample = firstSampleNumber;
+      this.extractTrak.samples = [];
+      this.file.start();
+    });
   }
 
   /**
@@ -162,12 +235,38 @@ export class MP4Demuxer {
   }
 
   /**
-   * Called when the demuxer is ready and has parsed the file's metadata.
+   * Called when the demuxer has parsed the moov box. Builds the lightweight
+   * sample index and configures on-demand extraction (without starting it).
    * @param {object} info - The file information.
    */
   onReady(info) {
     this.setStatus("demux", "Ready");
+    this.moovReady = true;
     const track = info.videoTracks[0];
+
+    // Build the lightweight sample index (no sample data).
+    const samplesInfo = this.file.getTrackSamplesInfo(track.id);
+    const index = samplesInfo.map((sample) => ({
+      number: sample.number,
+      cts: sample.cts,
+      dts: sample.dts,
+      duration: sample.duration,
+      timescale: sample.timescale,
+      is_sync: sample.is_sync,
+      offset: sample.offset,
+      size: sample.size,
+    }));
+    this.sampleManager.setIndex(index);
+    this.sampleManager.finalize();
+
+    // Configure on-demand extraction; it is started per byte range in extractRange.
+    this.file.setExtractionOptions(track.id, null, { nbSamples: 1 });
+    this.trak = this.file.getTrackById(track.id);
+    this.extractTrak =
+      this.file.extractedTracks[this.file.extractedTracks.length - 1];
+    this.sampleManager.setDataLoader((byteStart, byteEnd, firstSampleNumber, expectedCount) =>
+      this.extractRange(byteStart, byteEnd, firstSampleNumber, expectedCount)
+    );
 
     // Calculate duration in milliseconds
     const durationMs = (track.duration * 1000) / track.timescale;
@@ -189,62 +288,41 @@ export class MP4Demuxer {
     });
     this.nb_samples = track.nb_samples;
 
-    this.file.setExtractionOptions(track.id);
-    this.file.start();
+    // Release the head/tail parse buffers where fully consumed.
+    this.file.stream.cleanBuffers?.();
   }
 
   /**
-   * Called when video samples are extracted from the file.
+   * Called when samples are extracted on demand. Back-fills the sample data
+   * into the index and resolves the pending extraction once complete.
    * @param {number} track_id - The ID of the track.
    * @param {object} ref - Reference object.
    * @param {Array<object>} samples - The extracted samples.
    */
   onSamples(track_id, ref, samples) {
-    if (this.stopProcessingSamples) return;
-    this.passed_samples += samples.length;
-    this.sampleManager.addSamples(samples);
-    if (this.passed_samples >= this.nb_samples) {
-      this.stopProcessingSamples = true;
-      this.sampleManager.finalize();
+    const pending = this.pendingExtraction;
+    if (!pending) return;
+    this.sampleManager.backFillData(samples);
+    pending.received += samples.length;
+    if (pending.received >= pending.expectedCount) {
+      clearTimeout(pending.timeout);
+      this.file.stop();
+      this.pendingExtraction = null;
+      this.file.stream.cleanBuffers?.();
+      pending.resolve();
     }
   }
-}
-
-/**
- * A WritableStream sink for piping data to the MP4 demuxer.
- */
-export class MP4FileSink {
-  /**
-   * Initializes the MP4FileSink.
-   * @param {object} file - The mp4box.js file object.
-   * @param {function} setStatus - Callback to update the status.
-   */
-  constructor(file, setStatus) {
-    this.file = file;
-    this.setStatus = setStatus;
-    this.offset = 0;
-  }
 
   /**
-   * Writes a chunk of data to the file.
-   * @param {Uint8Array} chunk - The data chunk.
+   * Stops any ongoing extraction and releases demuxer resources.
    */
-  write(chunk) {
-    const buffer = new ArrayBuffer(chunk.byteLength);
-    new Uint8Array(buffer).set(chunk);
-    buffer.fileStart = this.offset;
-    this.offset += buffer.byteLength;
-
-    this.setStatus("fetch", `${(this.offset / 1024 / 1024).toFixed(1)} MB`);
-    this.file.appendBuffer(buffer);
-  }
-
-  /**
-   * Closes the file sink and flushes any pending data.
-   */
-  close() {
-    this.setStatus("fetch", "Complete");
+  shutdown() {
+    if (this.pendingExtraction) {
+      clearTimeout(this.pendingExtraction.timeout);
+      this.pendingExtraction.reject(new Error("Demuxer shut down"));
+      this.pendingExtraction = null;
+    }
+    this.file.stop();
     this.file.flush();
   }
 }
-("");
